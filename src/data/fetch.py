@@ -5,12 +5,10 @@
 """
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 import pandas as pd
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 _KEEP_COLS: list[str] = ["open", "high", "low", "close", "volume", "amount"]
 
@@ -112,13 +110,13 @@ def fetch_and_clean_data(
     last_err: Exception | None = None
     for name, fn in fetchers:
         try:
-            logger.info("[%s] 拉取 %s [%s, %s] ...", name, symbol, start_date, end_date)
+            logger.info("[{}] 拉取 {} [{}, {}] ...", name, symbol, start_date, end_date)
             df = fn(symbol, start_date, end_date)
             if df.empty:
                 raise ValueError("返回空数据")
             break
         except Exception as e:
-            logger.warning("[%s] 失败: %s", name, e)
+            logger.warning("[{}] 失败: {}", name, e)
             last_err = e
     else:
         raise RuntimeError(f"所有数据源均失败，最后错误: {last_err}") from last_err
@@ -126,10 +124,10 @@ def fetch_and_clean_data(
     # 前向填充: 金融时序处理停牌/缺失的行业惯例
     n_missing = int(df.isna().sum().sum())
     if n_missing:
-        logger.warning("发现 %d 个缺失值，执行 ffill", n_missing)
+        logger.warning("发现 {} 个缺失值，执行 ffill", n_missing)
     df = df.ffill()
 
-    logger.info("清洗完成 [%s]: %d 行 × %d 列", name, *df.shape)
+    logger.info("清洗完成 [{}]: {} 行 × {} 列", name, *df.shape)
     return df
 
 
@@ -138,5 +136,5 @@ def save_csv(df: pd.DataFrame, path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(path)
-    logger.info("已保存 → %s (%d 行)", path, len(df))
+    logger.info("已保存 → {} ({} 行)", path, len(df))
     return path
