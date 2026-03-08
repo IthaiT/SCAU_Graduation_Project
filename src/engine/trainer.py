@@ -1,4 +1,4 @@
-"""训练引擎: 早停 + 训练/验证循环。"""
+"""训练引擎: 早停 + 学习率调度 + 训练/验证循环。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,6 +7,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 from loguru import logger
+from torch.optim.lr_scheduler import LRScheduler, ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
 
@@ -82,9 +83,10 @@ def train_model(
     criterion: nn.Module,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
-    epochs: int = 100,
+    epochs: int = 50,
     patience: int = 10,
     save_path: str | Path = "models/best_model.pth",
+    scheduler: LRScheduler | None = None,
 ) -> dict[str, list[float]]:
     """完整训练循环，返回 history = {train_loss: [...], val_loss: [...]}。"""
     model.to(device)
@@ -98,9 +100,17 @@ def train_model(
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
 
+        # 学习率调度
+        if scheduler is not None:
+            if isinstance(scheduler, ReduceLROnPlateau):
+                scheduler.step(val_loss)
+            else:
+                scheduler.step()
+
+        lr = optimizer.param_groups[0]["lr"]
         logger.info(
-            "Epoch {:>3d}/{} | Train Loss: {:.6f} | Val Loss: {:.6f}",
-            epoch, epochs, train_loss, val_loss,
+            "Epoch {:>3d}/{} | Train: {:.6f} | Val: {:.6f} | LR: {:.2e}",
+            epoch, epochs, train_loss, val_loss, lr,
         )
 
         if es.step(val_loss, model):

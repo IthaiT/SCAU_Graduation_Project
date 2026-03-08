@@ -11,6 +11,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import pandas as pd  # noqa: E402
 import torch  # noqa: E402
 import torch.nn as nn  # noqa: E402
+from torch.optim.lr_scheduler import ReduceLROnPlateau  # noqa: E402
 
 from src.data.dataset import get_dataloaders  # noqa: E402
 from src.engine.trainer import train_model  # noqa: E402
@@ -26,13 +27,12 @@ logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {name} | {level} | {
 # ── 超参数 ────────────────────────────────────────────────────────
 SEQ_LEN = 30
 PRED_LEN = 1
-BATCH_SIZE = 64
+BATCH_SIZE = 32
 HIDDEN_DIM = 64
 NUM_HEADS = 4
-EPOCHS = 100
+EPOCHS = 50
 PATIENCE = 10
 LR = 1e-3
-WEIGHT_DECAY = 1e-4
 
 
 def main() -> None:
@@ -68,7 +68,8 @@ def main() -> None:
         logger.info("开始训练: {} ({:,} params)", model_name, sum(p.numel() for p in model.parameters()))
 
         criterion = nn.MSELoss()
-        optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+        optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+        scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
 
         history = train_model(
             model=model,
@@ -80,6 +81,7 @@ def main() -> None:
             epochs=EPOCHS,
             patience=PATIENCE,
             save_path=out_dir / f"{model_name}_best.pth",
+            scheduler=scheduler,
         )
 
         # 持久化训练历史
