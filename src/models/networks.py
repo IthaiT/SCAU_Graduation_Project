@@ -141,11 +141,74 @@ class LSTMTransformerModel(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        x, _ = self.lstm(x)
-        x = self.ln(x)                     # V2: 归一化
-        lstm_last = x[:, -1, :]            # V3: 保存 LSTM 短期特征 (B, H)
-        x = self.pe(x)
-        x, attn_w = self.encoder(x)
-        trans_last = x[:, -1, :]           # Transformer 全局特征 (B, H)
-        fused = torch.cat([lstm_last, trans_last], dim=-1)  # V3: (B, 2H)
-        return self.fusion(fused), attn_w  # V4: 门控融合
+        # 1. LSTM 提取特征
+        lstm_out, _ = self.lstm(x)
+        lstm_out = self.ln(lstm_out)
+        lstm_last = lstm_out[:, -1, :]
+        
+        # 2. Transformer 分支 (⚠️ 去掉 self.pe(lstm_out) )
+        # 直接用 LSTM 的输出送入 Transformer，因为已经有足够的时间信息
+        trans_out, attn_w = self.encoder(lstm_out) 
+        trans_last = trans_out[:, -1, :]
+        
+        # 3. 门控融合
+        fused = torch.cat([lstm_last, trans_last], dim=-1)
+        return self.fusion(fused), attn_w
+
+class ParallelLSTMTransformerModel(nn.Module):
+    def __init__(self, input_dim: int, hidden_dim: int = 64, num_lstm_layers: int = 2,
+                 num_heads: int = 4, num_transformer_layers: int = 2,
+                 ffn_dim: int = 256, pred_len: int = 1, dropout: float = 0.2) -> None:
+        super().__init__()
+        
+        # === 左塔：LSTM ===
+        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers=num_lstm_layers,
+                            batch_first=True, dropout=dropout if num_lstm_layers > 1 else 0.0)
+        self.ln_lstm = nn.LayerNorm(hidden_dim)
+        
+        # === 右塔：Transformer ===
+        self.proj = nn.Linear(input_dim, hidden_dim)
+        self.pe = PositionalEncoding(hidden_dim, dropout=dropout)
+        self.encoder = TransformerEncoder(hidden_dim, num_heads, num_transformer_layers, ffn_dim, dropout)
+        self.ln_trans = nn.LayerNorm(hidden_dim)
+
+        # === 动态门控融合机制 (Dynamic Gating Mechanism) ===
+        # 计算两个塔输出的权重
+        self.gate = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim * 2), # 输出 128 维（针对每一个特征）
+            nn.Sigmoid() # 用 Sigmoid，不要用 Softmax，允许某些特征同时高亮或同时抑制
+        )
+        
+        # 最终预测头
+        self.predictor = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim // 2, pred_len)
+        )
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        # 1. 跑左塔
+        out_lstm, _ = self.lstm(x)
+        feat_lstm = self.ln_lstm(out_lstm[:, -1, :])  # LSTM取最后一步
+        
+        # 2. 跑右塔 (修复：改用 Global Average Pooling)
+        out_trans = self.pe(self.proj(x))
+        out_trans, attn_w = self.encoder(out_trans)
+        # 用时间维度的平均值代表全局特征，而不是只看最后一步
+        feat_trans = self.ln_trans(out_trans.mean(dim=1)) 
+
+        # 3. 动态门控融合 (核心创新点)
+        concat_feats = torch.cat([feat_lstm, feat_trans], dim=-1) # (B, 128)
+        gate_weights = self.gate(concat_feats) # (B, 128)
+        
+        # 拆分成两个 (B, 64) 的权重向量
+        gate_lstm, gate_trans = gate_weights.chunk(2, dim=-1) 
+        
+        # 逐元素相乘（Hadamard Product）：让模型在 64 个维度上细粒度地挑选特征
+        fused_feat = gate_lstm * feat_lstm + gate_trans * feat_trans
+        
+        # 4. 预测
+        pred = self.predictor(fused_feat)
+        
+        return pred, attn_w

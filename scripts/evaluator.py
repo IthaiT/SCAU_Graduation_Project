@@ -30,6 +30,7 @@ from src.data.dataset import get_dataloaders  # noqa: E402
 from src.models.networks import (  # noqa: E402
     LSTMModel,
     LSTMTransformerModel,
+    ParallelLSTMTransformerModel,
     TransformerModel,
 )
 
@@ -51,11 +52,13 @@ _COLORS: dict[str, str] = {
     "LSTM": "#4C72B0",
     "Transformer": "#DD8452",
     "LSTM_Transformer": "#55A868",
+    "Parallel_LSTM_Transformer": "#C44E52",
 }
 _LABELS: dict[str, str] = {
     "LSTM": "LSTM",
     "Transformer": "Transformer",
     "LSTM_Transformer": "LSTM-Transformer",
+    "Parallel_LSTM_Transformer": "Parallel-LSTM-Transformer",
 }
 
 # ── 超参数 (与 train.py 一致) ────────────────────────────────────
@@ -67,7 +70,7 @@ NUM_HEADS = 4
 
 MODELS_DIR = PROJECT_ROOT / "models"
 RESULTS_DIR = PROJECT_ROOT / "results"
-MODEL_NAMES = ["LSTM", "Transformer", "LSTM_Transformer"]
+MODEL_NAMES = ["LSTM", "Transformer", "LSTM_Transformer", "Parallel_LSTM_Transformer"]
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────
@@ -82,6 +85,8 @@ def _build_model(name: str, input_dim: int) -> nn.Module:
         return LSTMModel(input_dim=input_dim, hidden_dim=HIDDEN_DIM, pred_len=PRED_LEN)
     if name == "Transformer":
         return TransformerModel(input_dim=input_dim, d_model=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN)
+    if name == "Parallel_LSTM_Transformer":
+        return ParallelLSTMTransformerModel(input_dim=input_dim, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN)
     return LSTMTransformerModel(input_dim=input_dim, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN)
 
 
@@ -129,7 +134,7 @@ def plot_predictions(
     x = np.arange(len(tail))
     fig, ax = plt.subplots(figsize=(13, 5), constrained_layout=True)
     ax.plot(x, tail, color="black", linewidth=2.0, label="真实值", zorder=5)
-    styles = ["-", "--", "-."]
+    styles = ["-", "--", "-.", ":"]
     for i, (name, pred) in enumerate(preds_dict.items()):
         ax.plot(x, pred[-last_n:], linestyle=styles[i % 3],
                 color=_COLORS.get(name), linewidth=1.4,
@@ -159,7 +164,7 @@ def plot_loss_curves(
         ax.set_title(title)
         ax.legend(frameon=True, fancybox=True, fontsize=9)
         ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, 3))
-    fig.suptitle("三模型训练过程损失对比", fontsize=14, fontweight="bold", y=1.02)
+    fig.suptitle("四模型训练过程损失对比", fontsize=14, fontweight="bold", y=1.02)
     _save(fig, save_path)
 
 
@@ -189,7 +194,7 @@ def plot_error_distribution(
     ax.axvline(x=0, color="black", linestyle="--", linewidth=1.0, alpha=0.6)
     ax.set_xlabel("预测误差 (预测值 − 真实值)")
     ax.set_ylabel("频数")
-    ax.set_title("三模型预测误差分布", fontsize=14, fontweight="bold")
+    ax.set_title("四模型预测误差分布", fontsize=14, fontweight="bold")
     ax.legend(frameon=True, fancybox=True, fontsize=9)
     ax.grid(alpha=0.3)
     _save(fig, save_path)
@@ -245,7 +250,7 @@ def main() -> None:
         logger.info("{} → MSE={:.2f} RMSE={:.2f} MAPE={:.2f}% DA={:.2f}%",
                      name, m["MSE"], m["RMSE"], m["MAPE"], m["DA"])
 
-        if name == "LSTM_Transformer" and attn is not None:
+        if name in ("LSTM_Transformer", "Parallel_LSTM_Transformer") and attn is not None:
             attn_for_heatmap = attn
 
     assert true_real is not None

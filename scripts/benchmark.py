@@ -22,6 +22,7 @@ from src.engine.trainer import train_model  # noqa: E402
 from src.models.networks import (  # noqa: E402
     LSTMModel,
     LSTMTransformerModel,
+    ParallelLSTMTransformerModel,
     TransformerModel,
 )
 
@@ -41,8 +42,8 @@ EPOCHS = 50
 PATIENCE = 10
 LR = 1e-3
 
-MODEL_NAMES = ["LSTM", "Transformer", "LSTM_Transformer"]
-MODEL_LABELS = {"LSTM": "LSTM", "Transformer": "Transformer", "LSTM_Transformer": "LSTM-Transformer"}
+MODEL_NAMES = ["LSTM", "Transformer", "LSTM_Transformer", "Parallel_LSTM_Transformer"]
+MODEL_LABELS = {"LSTM": "LSTM", "Transformer": "Transformer", "LSTM_Transformer": "LSTM-Transformer", "Parallel_LSTM_Transformer": "Parallel-LSTM-Trans"}
 MODELS_DIR = PROJECT_ROOT / "models"
 RESULTS_DIR = PROJECT_ROOT / "results"
 OUTPUT_FILE = RESULTS_DIR / "benchmark_results.txt"
@@ -54,6 +55,8 @@ def _build_model(name: str, input_dim: int) -> nn.Module:
         return LSTMModel(input_dim=input_dim, hidden_dim=HIDDEN_DIM, pred_len=PRED_LEN)
     if name == "Transformer":
         return TransformerModel(input_dim=input_dim, d_model=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN)
+    if name == "Parallel_LSTM_Transformer":
+        return ParallelLSTMTransformerModel(input_dim=input_dim, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN)
     return LSTMTransformerModel(input_dim=input_dim, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN)
 
 
@@ -95,13 +98,14 @@ def run_once(
         "LSTM": LSTMModel(input_dim=num_features, hidden_dim=HIDDEN_DIM, pred_len=PRED_LEN),
         "Transformer": TransformerModel(input_dim=num_features, d_model=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN),
         "LSTM_Transformer": LSTMTransformerModel(input_dim=num_features, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN),
+        "Parallel_LSTM_Transformer": ParallelLSTMTransformerModel(input_dim=num_features, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN),
     }
 
     # 训练
     for model_name, model in models.items():
         logger.info("训练: {} ({:,} params)", model_name, sum(p.numel() for p in model.parameters()))
         criterion = nn.HuberLoss(delta=1.0)
-        if model_name == "LSTM_Transformer":
+        if model_name in ("LSTM_Transformer", "Parallel_LSTM_Transformer"):
             lr = 5e-4
             optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-3)
             scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)

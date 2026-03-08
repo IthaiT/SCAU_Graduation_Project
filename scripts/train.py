@@ -18,6 +18,7 @@ from src.engine.trainer import train_model  # noqa: E402
 from src.models.networks import (  # noqa: E402
     LSTMModel,
     LSTMTransformerModel,
+    ParallelLSTMTransformerModel,
     TransformerModel,
 )
 
@@ -53,11 +54,12 @@ def main() -> None:
         batch_size=BATCH_SIZE,
     )
 
-    # 三模型实例化
+    # 四模型实例化
     models: dict[str, nn.Module] = {
         "LSTM": LSTMModel(input_dim=num_features, hidden_dim=HIDDEN_DIM, pred_len=PRED_LEN),
         "Transformer": TransformerModel(input_dim=num_features, d_model=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN),
         "LSTM_Transformer": LSTMTransformerModel(input_dim=num_features, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN),
+        "Parallel_LSTM_Transformer": ParallelLSTMTransformerModel(input_dim=num_features, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN),
     }
 
     out_dir = PROJECT_ROOT / "models"
@@ -70,7 +72,7 @@ def main() -> None:
         criterion = nn.HuberLoss(delta=1.0)  # V4: 鲁棒损失，抑制异常值极端梯度
 
         # V2: 融合模型使用更低的学习率 + CosineAnnealing，基线保持原配置
-        if model_name == "LSTM_Transformer":
+        if model_name in ("LSTM_Transformer", "Parallel_LSTM_Transformer"):
             lr = 5e-4
             optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-3)  # V3: L2 正则化
             scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
