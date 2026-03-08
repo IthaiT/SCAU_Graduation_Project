@@ -111,11 +111,12 @@ class TransformerModel(nn.Module):
 
 # ── 核心融合: LSTM + Transformer ─────────────────────────────────
 class LSTMTransformerModel(nn.Module):
-    """LSTM 提取局部时序 → LayerNorm → 位置编码 → N层 Transformer → 特征融合 → FC。
+    """LSTM 提取局部时序 → LayerNorm → 位置编码 → N层 Transformer → 门控融合 → 输出。
 
     V2: LSTM 与 Transformer 之间插入 LayerNorm，消除方差偏移。
-    V3: LSTM 最后时间步输出与 Transformer 最后时间步输出拼接后送入 FC，
-        形成跳跃连接，保留短期动量特征，避免 Transformer 过度平滑。
+    V3: LSTM 最后时间步输出与 Transformer 最后时间步输出拼接（跳跃连接）。
+    V4: 融合层升级为门控瓶颈网络 (Linear→ReLU→Dropout→Linear)，
+        实现对双分支特征的非线性过滤与动态加权。
     """
 
     def __init__(self, input_dim: int, hidden_dim: int = 64, num_lstm_layers: int = 2,
@@ -131,7 +132,13 @@ class LSTMTransformerModel(nn.Module):
         self.encoder = TransformerEncoder(
             hidden_dim, num_heads, num_transformer_layers, ffn_dim, dropout,
         )
-        self.fc = nn.Linear(hidden_dim * 2, pred_len)  # V3: 拼接后维度翻倍
+        # V4: 门控融合瓶颈网络（替代 V3 的单层 Linear）
+        self.fusion = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, pred_len),
+        )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x, _ = self.lstm(x)
@@ -141,4 +148,4 @@ class LSTMTransformerModel(nn.Module):
         x, attn_w = self.encoder(x)
         trans_last = x[:, -1, :]           # Transformer 全局特征 (B, H)
         fused = torch.cat([lstm_last, trans_last], dim=-1)  # V3: (B, 2H)
-        return self.fc(fused), attn_w
+        return self.fusion(fused), attn_w  # V4: 门控融合

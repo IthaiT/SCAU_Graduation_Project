@@ -67,7 +67,7 @@ def main() -> None:
         logger.info("=" * 40)
         logger.info("开始训练: {} ({:,} params)", model_name, sum(p.numel() for p in model.parameters()))
 
-        criterion = nn.MSELoss()
+        criterion = nn.HuberLoss(delta=1.0)  # V4: 鲁棒损失，抑制异常值极端梯度
 
         # V2: 融合模型使用更低的学习率 + CosineAnnealing，基线保持原配置
         if model_name == "LSTM_Transformer":
