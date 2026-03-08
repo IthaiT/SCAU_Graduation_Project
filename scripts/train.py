@@ -72,7 +72,7 @@ def main() -> None:
         # V2: 融合模型使用更低的学习率 + CosineAnnealing，基线保持原配置
         if model_name == "LSTM_Transformer":
             lr = 5e-4
-            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-3)  # V3: L2 正则化
             scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
         else:
             lr = LR

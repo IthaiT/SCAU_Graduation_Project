@@ -111,10 +111,11 @@ class TransformerModel(nn.Module):
 
 # ── 核心融合: LSTM + Transformer ─────────────────────────────────
 class LSTMTransformerModel(nn.Module):
-    """LSTM 提取局部时序 → LayerNorm → 位置编码 → N层 Transformer 捕获全局依赖 → FC 输出。
+    """LSTM 提取局部时序 → LayerNorm → 位置编码 → N层 Transformer → 特征融合 → FC。
 
-    V2: LSTM 与 Transformer 之间插入 LayerNorm，消除方差偏移，
-        防止 Self-Attention 点积异常导致的梯度爆炸与模式坍塌。
+    V2: LSTM 与 Transformer 之间插入 LayerNorm，消除方差偏移。
+    V3: LSTM 最后时间步输出与 Transformer 最后时间步输出拼接后送入 FC，
+        形成跳跃连接，保留短期动量特征，避免 Transformer 过度平滑。
     """
 
     def __init__(self, input_dim: int, hidden_dim: int = 64, num_lstm_layers: int = 2,
@@ -130,11 +131,14 @@ class LSTMTransformerModel(nn.Module):
         self.encoder = TransformerEncoder(
             hidden_dim, num_heads, num_transformer_layers, ffn_dim, dropout,
         )
-        self.fc = nn.Linear(hidden_dim, pred_len)
+        self.fc = nn.Linear(hidden_dim * 2, pred_len)  # V3: 拼接后维度翻倍
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x, _ = self.lstm(x)
-        x = self.ln(x)  # V2: 归一化至零均值、单位方差
+        x = self.ln(x)                     # V2: 归一化
+        lstm_last = x[:, -1, :]            # V3: 保存 LSTM 短期特征 (B, H)
         x = self.pe(x)
         x, attn_w = self.encoder(x)
-        return self.fc(x[:, -1, :]), attn_w
+        trans_last = x[:, -1, :]           # Transformer 全局特征 (B, H)
+        fused = torch.cat([lstm_last, trans_last], dim=-1)  # V3: (B, 2H)
+        return self.fc(fused), attn_w

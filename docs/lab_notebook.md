@@ -152,11 +152,56 @@ $$
 | 梯度裁剪               | 无                | **max_norm=1.0**      | **max_norm=1.0**          |
 | LayerNorm (LSTM→Trans) | 无                | **有**                | N/A                       |
 
+**实验结果（实际）：**
+
+| 模型                 | MSE        | DA (%)     | 训练行为                                                                |
+| :------------------- | :--------- | :--------- | :---------------------------------------------------------------------- |
+| LSTM                 | 20,520     | ~50%       | 收敛正常，输出延迟一步                                                  |
+| Transformer          | 20,006     | ~50%       | 收敛正常，输出延迟一步                                                  |
+| **LSTM-Transformer** | **33,840** | **50.37%** | **模式坍塌已消除，出现真实波动；但 MSE 仍高于基线，验证 loss 后期振荡** |
+
+**V2 成果与遗留问题：**
+
+✅ **已解决**：
+- 模式坍塌（水平线）现象完全消除，预测曲线恢复波动
+- DA 从 44.60% 提升至 50.37%，模型不再输出常数
+
+❌ **遗留问题**：
+- 三个模型的 DA 均在 50% 附近，说明所有模型仍停留在"滞后预测"阶段（详见 1.5 节分析）
+- 融合模型 MSE (33,840) 仍显著高于纯 LSTM (20,520) 和纯 Transformer (20,006)
+- 验证 loss 在后期出现明显振荡，泛化能力不足
+
+---
+
+#### V3 — 特征融合与正则化版（Feature Fusion & Regularization）
+
+> **日期**：2026年3月8日
+
+**核心洞察（来自论文原文重读）：**
+
+> *"The final dense layer maps the extracted features from the **LSTM and Transformer layers** into a single numerical output."*
+
+论文描述的是 LSTM **和** Transformer 的特征同时送入最终全连接层，而非 V1/V2 中 LSTM → Transformer 的纯串行流水线。这意味着需要一条**跳跃连接（Skip Connection）**保留 LSTM 提取的短期动量特征，与 Transformer 的长程依赖特征进行拼接融合。
+
+**变更清单（Changelog）：**
+
+| 文件                     | 变更内容                                                                                                     | 目的                                    |
+| :----------------------- | :----------------------------------------------------------------------------------------------------------- | :-------------------------------------- |
+| `src/models/networks.py` | 保存 LSTM 最后时间步输出，将其与 Transformer 最后时间步输出拼接后送入 FC；FC 输入维度更新为 `hidden_dim * 2` | 保留短期特征，避免 Transformer 过度平滑 |
+| `scripts/train.py`       | LSTM-Transformer 的 Adam 优化器增加 `weight_decay=1e-3`                                                      | L2 正则化抑制验证 loss 振荡             |
+
+**V3 超参数配置（仅列出与 V2 不同项）：**
+
+| 参数         | V2 (LSTM-Transformer) | V3 (LSTM-Transformer)             |
+| :----------- | :-------------------- | :-------------------------------- |
+| FC 输入维度  | 64                    | **128** (64×2 拼接)               |
+| weight_decay | 0                     | **1e-3**                          |
+| 特征融合     | 无（纯串行）          | **Concat(LSTM_last, Trans_last)** |
+
 **预期效果：**
-- 验证 loss 单调递减并收敛，不再发散
-- 预测曲线恢复波动特征，不再是水平线
-- DA 显著高于 50%，表示模型学到了超越随机游走的预测能力
-- MSE 大幅下降至与基线模型同一数量级
+- MSE 大幅下降，达到或优于基线模型水平
+- DA > 50%，融合模型的方向预测能力超越单一基线
+- 验证 loss 更加平滑，过拟合倾向受到抑制
 
 ---
 
@@ -257,37 +302,202 @@ V2 修复策略（逐环节切断）:
   LSTM 输出方差漂移 ─── LayerNorm ──→ 消除
   Attention 梯度爆炸 ─── clip_grad_norm_ ──→ 截断  
   参数更新震荡 ─── 低 LR + CosineAnnealing ──→ 平滑
+
+V3 性能提升策略:
+  短期特征丢失 ─── Feature Fusion (Concat) ──→ 保留 LSTM 短期动量
+  验证 loss 振荡 ─── weight_decay=1e-3 (L2) ──→ 正则化平滑
 ```
+
+#### V3 架构（Feature Fusion — 特征拼接融合）
+
+```
+输入 (B, 30, F)
+    │
+    ▼
+┌──────────────────────────┐
+│  LSTM (2层, hidden=64)   │
+│  dropout=0.2             │
+└────────────┬─────────────┘
+             │ (B, 30, 64)
+             ▼
+┌──────────────────────────┐
+│  LayerNorm(64)           │
+└────────────┬─────────────┘
+             │ (B, 30, 64)
+             │
+       ┌─────┴──────┐
+       │             │
+       ▼             │
+  取 last step       │
+       │ (B, 64)     │ (B, 30, 64)
+       │             ▼
+       │    ┌──────────────────────────┐
+       │    │  Positional Encoding     │
+       │    │  + Dropout(0.2)          │
+       │    └────────────┬─────────────┘
+       │                 │ (B, 30, 64)
+       │                 ▼
+       │    ┌──────────────────────────┐
+       │    │  Transformer Encoder     │
+       │    │  × 2 层                  │
+       │    │  (MHA: 4 heads + FFN)    │
+       │    └────────────┬─────────────┘
+       │                 │ (B, 30, 64)
+       │                 ▼
+       │            取 last step
+       │                 │ (B, 64)
+       │                 │
+       ▼                 ▼
+  ┌────────────────────────────┐
+  │  ★ Concat (dim=-1) ★      │  ← 【V3 新增】特征融合
+  │  LSTM_last ⊕ Trans_last   │
+  └────────────┬───────────────┘
+               │ (B, 128)      ← 64 + 64
+               ▼
+  ┌──────────────────────────┐
+  │  FC Linear(128, 1)       │  ← 【V3 更新】输入维度翻倍
+  └────────────┬─────────────┘
+               │ (B, 1)
+               ▼
+            输出预测值
+
+训练策略:
+  ┌────────────────────────────────────────────┐
+  │ Optimizer: Adam (lr=5e-4, wd=1e-3)         │  ← 【V3 新增 weight_decay】
+  │ Scheduler: CosineAnnealingLR(T_max=50)     │
+  │ Gradient Clip: max_norm=1.0                │
+  │ Early Stopping: patience=10                │
+  └────────────────────────────────────────────┘
+```
+
+---
+
+### 1.5 V2→V3：滞后预测现象与特征融合的理论分析
+
+#### 为什么绝对价格预测总会产生 DA≈50% 的"滞后预测"？
+
+当我们观察 V2 的三条预测曲线时，会发现一个共同的模式：**预测线几乎是真实线的"右移一步"版本**。这就是所谓的**滞后预测（Lagging Prediction）**。
+
+产生这一现象的根本原因在于损失函数与金融时序的统计特性之间的"合谋"：
+
+1. **MSE 损失的最优解趋向于条件均值**：对于回归任务，MSE 的最小化解是 $\hat{y}_t = \mathbb{E}[y_t | x_{1:t}]$，即给定历史信息的条件期望。
+
+2. **金融价格近似鞅过程**：根据有效市场假说弱式推论，$\mathbb{E}[P_t | P_{1:t-1}] \approx P_{t-1}$。即在条件期望意义下，明天的价格最佳估计就是今天的价格。
+
+3. **因此，MSE 最优策略就是"复制昨天的价格"**：
+$$
+\hat{P}_t^* = \arg\min_{\hat{P}} \mathbb{E}[(P_t - \hat{P})^2 | \mathcal{F}_{t-1}] \approx P_{t-1}
+$$
+
+这解释了为什么所有模型的 MSE 都"看起来不错"，但 DA 始终在 50% 徘徊——模型并未学习到价格变动的方向信息。
+
+#### V2 中融合模型为何 MSE 反而高于基线？——过度平滑问题
+
+在 V2 的纯串行架构 `LSTM → Transformer → FC` 中：
+
+- LSTM 提取了**短期局部动量特征**（近几天的价格趋势、波动率变化）
+- 这些特征被传入 Transformer 的 2 层自注意力编码器
+- Transformer 的自注意力机制**对所有时间步做加权平均**，这一操作天然具有**平滑效应（Smoothing Effect）**
+
+$$
+\text{Attention Output}_i = \sum_{j=1}^{S} \alpha_{ij} \cdot v_j, \quad \sum_j \alpha_{ij} = 1
+$$
+
+加权平均的本质就是对序列做**低通滤波**——高频信号（短期动量）被衰减，只留下低频趋势。
+
+结果就是：**LSTM 辛苦提取的短期特征被 Transformer 的注意力平滑"洗掉"了**，最终到达 FC 层的信息量反而不如纯 LSTM 直接输出。这就解释了为什么 V2 融合模型的 MSE (33,840) 高于纯 LSTM (20,520)。
+
+#### V3 特征融合（Feature Fusion）的理论优势
+
+V3 的核心修改是引入一条**跳跃连接（Skip Connection）**：
+
+$$
+h_{\text{fused}} = \text{Concat}\!\left(h_{\text{LSTM}}^{(T)},\ h_{\text{Trans}}^{(T)}\right) \in \mathbb{R}^{2d}
+$$
+
+其中 $h_{\text{LSTM}}^{(T)}$ 是 LSTM 在最后一个时间步的隐藏状态，$h_{\text{Trans}}^{(T)}$ 是 Transformer 编码器在最后一个时间步的输出。
+
+这一设计的理论优势：
+
+| 特性            | 纯串行 (V2)                 | 特征融合 (V3)                   |
+| :-------------- | :-------------------------- | :------------------------------ |
+| 短期动量        | 被 Transformer 平滑衰减     | 通过跳跃连接完整保留            |
+| 长程依赖        | Transformer 捕获            | Transformer 捕获                |
+| FC 层输入信息量 | 仅 Transformer 输出 (64维)  | LSTM + Transformer 双流 (128维) |
+| 梯度回传路径    | 必须经过 Transformer 全部层 | LSTM 有直连梯度通路，训练更稳定 |
+
+从信息论的角度，特征融合保证了：
+$$
+I(h_{\text{fused}}; y) \geq \max\!\left(I(h_{\text{LSTM}}; y),\ I(h_{\text{Trans}}; y)\right)
+$$
+
+拼接后的特征向量所携带的关于目标变量 $y$ 的互信息，不低于任何单一分支——因为 FC 层可以自适应地学习两个分支的最优加权组合。
+
+> **答辩话术**："V2 的纯串行流水线存在特征过度平滑的问题——LSTM 提取的短期动量被 Transformer 的注意力机制低通滤波所衰减。V3 引入跳跃连接进行特征拼接融合，使最终全连接层能够同时利用 LSTM 的局部时序特征和 Transformer 的全局注意力特征，这与原论文关于'将 LSTM 和 Transformer 层的特征共同映射到输出'的描述完全吻合。"
+
+#### weight_decay（L2 正则化）对验证 loss 振荡的抑制
+
+V2 中融合模型的验证 loss 在后期出现明显振荡，这是**过拟合的早期信号**。引入 `weight_decay=1e-3`（等价于 L2 正则化）的作用是：
+
+$$
+\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{MSE}} + \frac{\lambda}{2}\|\theta\|_2^2, \quad \lambda = 10^{-3}
+$$
+
+L2 惩罚项对大权重施加"收缩力"，防止个别参数过度增长，使得：
+- 损失面变得更加光滑，减少局部震荡
+- 模型容量受到温和约束，降低对训练集噪声的过拟合
 
 ---
 
 ## 第三部分：答辩叙事建议
 
-### 将失败转化为学术贡献
+### 将三轮迭代转化为学术贡献
 
-在答辩时，**不要回避 V1 的失败**，而是将其作为系统性消融研究（Ablation Study）的一部分来呈现：
+在答辩时，将 V1→V2→V3 的迭代过程作为系统性消融研究（Ablation Study）来呈现：
 
-> "在严格复现论文架构的 V1 实验中，我们发现 LSTM-Transformer 融合模型出现了严重的训练发散和模式坍塌现象。通过对梯度传播路径的系统分析，我们定位了三个关键瓶颈：LSTM 输出的方差偏移、自注意力机制的梯度爆炸以及优化器在复杂损失面上的震荡。在 V2 中，我们针对性地引入 LayerNorm 归一化层、梯度裁剪和余弦退火学习率策略，成功解决了训练稳定性问题。**这一调优过程本身体现了对深度学习训练动力学的深入理解和工程实践能力**。"
+> "本研究通过三轮迭代实验，系统性地解决了 LSTM-Transformer 混合模型在金融时序预测中的训练稳定性与特征利用问题。V1 严格复现论文架构后出现模式坍塌，通过梯度传播分析定位为方差偏移-梯度爆炸级联故障；V2 引入 LayerNorm、梯度裁剪和余弦退火策略，成功消除模式坍塌但发现特征过度平滑问题；V3 通过特征拼接融合建立跳跃连接，使 FC 层能同时利用 LSTM 短期动量与 Transformer 全局依赖。**这一'发现问题→诊断根因→针对性修复'的迭代方法论，体现了深度学习工程实践中系统化调优的学术素养。**"
+
+### 三轮迭代总览
+
+| 版本 | 核心问题              | 解决方案                                | 效果                              |
+| :--- | :-------------------- | :-------------------------------------- | :-------------------------------- |
+| V1   | 模式坍塌（水平线）    | —（论文原始架构）                       | MSE=138,467, DA=44.60%            |
+| V2   | 梯度爆炸 / 方差偏移   | LayerNorm + Grad Clip + CosineAnnealing | MSE=33,840, DA=50.37%（坍塌消除） |
+| V3   | 特征过度平滑 / 过拟合 | Feature Fusion Concat + L2 正则化       | 待填入实验结果                    |
 
 ### 关键学术术语速查表
 
-| 英文术语             | 中文翻译     | 在本项目中的含义         |
-| :------------------- | :----------- | :----------------------- |
-| Mode Collapse        | 模式坍塌     | 模型输出退化为常数       |
-| Variance Shift       | 方差偏移     | LSTM 输出分布不稳定      |
-| Gradient Explosion   | 梯度爆炸     | 反向传播梯度量级过大     |
-| Layer Normalization  | 层归一化     | 对每个样本的特征做标准化 |
-| Gradient Clipping    | 梯度裁剪     | 限制梯度最大范数         |
-| Cosine Annealing     | 余弦退火     | 学习率按余弦函数衰减     |
-| Random Walk Trap     | 随机游走陷阱 | 模型只学会复制昨天的值   |
-| Directional Accuracy | 方向准确率   | 正确预测涨跌方向的比例   |
-| Ablation Study       | 消融实验     | 逐一移除组件以验证贡献   |
+| 英文术语             | 中文翻译     | 在本项目中的含义           |
+| :------------------- | :----------- | :------------------------- |
+| Mode Collapse        | 模式坍塌     | 模型输出退化为常数         |
+| Variance Shift       | 方差偏移     | LSTM 输出分布不稳定        |
+| Gradient Explosion   | 梯度爆炸     | 反向传播梯度量级过大       |
+| Layer Normalization  | 层归一化     | 对每个样本的特征做标准化   |
+| Gradient Clipping    | 梯度裁剪     | 限制梯度最大范数           |
+| Cosine Annealing     | 余弦退火     | 学习率按余弦函数衰减       |
+| Random Walk Trap     | 随机游走陷阱 | 模型只学会复制昨天的值     |
+| Lagging Prediction   | 滞后预测     | 预测值 ≈ 前一天真实值      |
+| Feature Fusion       | 特征融合     | 拼接多分支特征后联合决策   |
+| Skip Connection      | 跳跃连接     | 绕过中间层直连的信息通路   |
+| Over-smoothing       | 过度平滑     | 注意力加权平均衰减高频信号 |
+| Weight Decay / L2    | 权重衰减     | 正则化防止过拟合           |
+| Directional Accuracy | 方向准确率   | 正确预测涨跌方向的比例     |
+| Ablation Study       | 消融实验     | 逐一移除组件以验证贡献     |
 
 ---
 
-> **提示**：待 V2 训练完成后，将实际实验数据填入上方 V2 结果表格，并在 `results/` 目录中保存对比图表。
-> 
+> **提示**：待 V3 训练完成后，将实际实验数据填入上方 V3 结果表格，并在 `results/` 目录中保存对比图表。
+
+
+## 第四部分：图表
+### V1
 ![V1 attention_heatmap](assets/lab_notebook/image.png)
 ![V1 error_distribution](assets/lab_notebook/image-1.png)
 ![V1 loss_curve](assets/lab_notebook/image-2.png)
 ![V1 predictions](assets/lab_notebook/image-3.png)
+
+### V2
+![V2 attention_heatmap](assets/lab_notebook/image-4.png)
+![V2 error_distribution](assets/lab_notebook/image-5.png)
+![V2 loss_curve](assets/lab_notebook/image-6.png)
+![V2 predictions](assets/lab_notebook/image-7.png)
