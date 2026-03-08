@@ -111,7 +111,11 @@ class TransformerModel(nn.Module):
 
 # ── 核心融合: LSTM + Transformer ─────────────────────────────────
 class LSTMTransformerModel(nn.Module):
-    """LSTM 提取局部时序 → 位置编码 → N层 Transformer 捕获全局依赖 → FC 输出。"""
+    """LSTM 提取局部时序 → LayerNorm → 位置编码 → N层 Transformer 捕获全局依赖 → FC 输出。
+
+    V2: LSTM 与 Transformer 之间插入 LayerNorm，消除方差偏移，
+        防止 Self-Attention 点积异常导致的梯度爆炸与模式坍塌。
+    """
 
     def __init__(self, input_dim: int, hidden_dim: int = 64, num_lstm_layers: int = 2,
                  num_heads: int = 4, num_transformer_layers: int = 2,
@@ -121,6 +125,7 @@ class LSTMTransformerModel(nn.Module):
             input_dim, hidden_dim, num_layers=num_lstm_layers,
             batch_first=True, dropout=dropout if num_lstm_layers > 1 else 0.0,
         )
+        self.ln = nn.LayerNorm(hidden_dim)  # V2: 稳定 LSTM→Transformer 方差
         self.pe = PositionalEncoding(hidden_dim, dropout=dropout)
         self.encoder = TransformerEncoder(
             hidden_dim, num_heads, num_transformer_layers, ffn_dim, dropout,
@@ -129,6 +134,7 @@ class LSTMTransformerModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x, _ = self.lstm(x)
+        x = self.ln(x)  # V2: 归一化至零均值、单位方差
         x = self.pe(x)
         x, attn_w = self.encoder(x)
         return self.fc(x[:, -1, :]), attn_w

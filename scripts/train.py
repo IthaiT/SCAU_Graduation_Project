@@ -11,7 +11,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import pandas as pd  # noqa: E402
 import torch  # noqa: E402
 import torch.nn as nn  # noqa: E402
-from torch.optim.lr_scheduler import ReduceLROnPlateau  # noqa: E402
+from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau  # noqa: E402
 
 from src.data.dataset import get_dataloaders  # noqa: E402
 from src.engine.trainer import train_model  # noqa: E402
@@ -68,8 +68,18 @@ def main() -> None:
         logger.info("开始训练: {} ({:,} params)", model_name, sum(p.numel() for p in model.parameters()))
 
         criterion = nn.MSELoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=LR)
-        scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
+
+        # V2: 融合模型使用更低的学习率 + CosineAnnealing，基线保持原配置
+        if model_name == "LSTM_Transformer":
+            lr = 5e-4
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+            scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
+        else:
+            lr = LR
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+            scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
+
+        logger.info("  LR={:.1e}, Scheduler={}", lr, type(scheduler).__name__)
 
         history = train_model(
             model=model,

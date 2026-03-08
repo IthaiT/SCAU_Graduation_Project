@@ -49,6 +49,7 @@ def _run_epoch(
     criterion: nn.Module,
     device: torch.device,
     optimizer: torch.optim.Optimizer | None = None,
+    max_grad_norm: float = 0.0,
 ) -> float:
     """跑一个 epoch，optimizer 非空则训练模式，否则验证模式。返回平均 loss。"""
     is_train = optimizer is not None
@@ -67,6 +68,9 @@ def _run_epoch(
             if is_train:
                 optimizer.zero_grad()
                 loss.backward()
+                # V2: 梯度裁剪，防止梯度爆炸
+                if max_grad_norm > 0:
+                    nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                 optimizer.step()
 
             total_loss += loss.item()
@@ -87,6 +91,7 @@ def train_model(
     patience: int = 10,
     save_path: str | Path = "models/best_model.pth",
     scheduler: LRScheduler | None = None,
+    max_grad_norm: float = 1.0,
 ) -> dict[str, list[float]]:
     """完整训练循环，返回 history = {train_loss: [...], val_loss: [...]}。"""
     model.to(device)
@@ -94,7 +99,7 @@ def train_model(
     history: dict[str, list[float]] = {"train_loss": [], "val_loss": []}
 
     for epoch in range(1, epochs + 1):
-        train_loss = _run_epoch(model, train_loader, criterion, device, optimizer)
+        train_loss = _run_epoch(model, train_loader, criterion, device, optimizer, max_grad_norm)
         val_loss = _run_epoch(model, val_loader, criterion, device)
 
         history["train_loss"].append(train_loss)
