@@ -1,7 +1,8 @@
-"""验证 DataLoader 张量流转正确性。"""
+"""验证 DataLoader 张量流转正确性 (三分类)。"""
 import sys
 from pathlib import Path
 
+import torch
 from loguru import logger
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -15,7 +16,6 @@ logger.remove()
 logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {name} | {level} | {message}")
 
 SEQ_LEN = 30
-PRED_LEN = 1
 BATCH_SIZE = 64
 
 
@@ -25,22 +25,21 @@ def main() -> None:
     logger.info("读取: {} {}", csv_path.name, df.shape)
 
     columns = df.columns.tolist()
-    train_loader, val_loader, test_loader, scaler_target = get_dataloaders(
+    train_loader, val_loader, test_loader = get_dataloaders(
         df_values=df.values,
         columns=columns,
         seq_len=SEQ_LEN,
-        pred_len=PRED_LEN,
         batch_size=BATCH_SIZE,
     )
 
     for name, loader in [("train", train_loader), ("val", val_loader), ("test", test_loader)]:
         X, y = next(iter(loader))
-        logger.info("{:>5s} batch — X: {}  y: {}", name, tuple(X.shape), tuple(y.shape))
+        logger.info("{:>5s} batch — X: {}  y: {} dtype={}", name, tuple(X.shape), tuple(y.shape), y.dtype)
+        assert X.dim() == 3 and X.shape[1] == SEQ_LEN
+        assert y.dim() == 1 and y.dtype == torch.long
+        assert y.min() >= 0 and y.max() <= 2
 
-    # 验证 inverse_transform 可用
-    sample_y = y[:3].numpy()
-    restored = scaler_target.inverse_transform(sample_y)
-    logger.info("inverse_transform 验证 (前3): {}", restored.flatten().tolist())
+    logger.info("全部断言通过 ✓")
 
 
 if __name__ == "__main__":

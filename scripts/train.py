@@ -1,4 +1,4 @@
-"""三模型对比训练: LSTM / Transformer / LSTM+Transformer。"""
+"""四模型对比训练: LSTM / Transformer / LSTM-Transformer / Parallel (三分类)。"""
 import json
 import sys
 from pathlib import Path
@@ -27,11 +27,11 @@ logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {name} | {level} | {
 
 # ── 超参数 ────────────────────────────────────────────────────────
 SEQ_LEN = 30
-PRED_LEN = 1
+NUM_CLASSES = 3
 BATCH_SIZE = 32
 HIDDEN_DIM = 64
 NUM_HEADS = 4
-EPOCHS = 50
+EPOCHS = 100
 PATIENCE = 10
 LR = 5e-4
 
@@ -46,20 +46,19 @@ def main() -> None:
     columns = df.columns.tolist()
     num_features = len(columns)
 
-    train_loader, val_loader, test_loader, scaler_target = get_dataloaders(  # test_loader / scaler_target 留给 M6 评估阶段使用
+    train_loader, val_loader, test_loader = get_dataloaders(
         df_values=df.values,
         columns=columns,
         seq_len=SEQ_LEN,
-        pred_len=PRED_LEN,
         batch_size=BATCH_SIZE,
     )
 
     # 四模型实例化
     models: dict[str, nn.Module] = {
-        "LSTM": LSTMModel(input_dim=num_features, hidden_dim=HIDDEN_DIM, pred_len=PRED_LEN),
-        "Transformer": TransformerModel(input_dim=num_features, d_model=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN),
-        "LSTM_Transformer": LSTMTransformerModel(input_dim=num_features, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN),
-        "Parallel_LSTM_Transformer": ParallelLSTMTransformerModel(input_dim=num_features, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN),
+        "LSTM": LSTMModel(input_dim=num_features, hidden_dim=HIDDEN_DIM, num_classes=NUM_CLASSES),
+        "Transformer": TransformerModel(input_dim=num_features, d_model=HIDDEN_DIM, num_heads=NUM_HEADS, num_classes=NUM_CLASSES),
+        "LSTM_Transformer": LSTMTransformerModel(input_dim=num_features, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, num_classes=NUM_CLASSES),
+        "Parallel_LSTM_Transformer": ParallelLSTMTransformerModel(input_dim=num_features, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, num_classes=NUM_CLASSES),
     }
 
     out_dir = PROJECT_ROOT / "models"
@@ -69,9 +68,9 @@ def main() -> None:
         logger.info("=" * 40)
         logger.info("开始训练: {} ({:,} params)", model_name, sum(p.numel() for p in model.parameters()))
 
-        criterion = nn.HuberLoss(delta=1.0)  # V4: 鲁棒损失，抑制异常值极端梯度
+        criterion = nn.CrossEntropyLoss()
 
-        # V5: 统一训练配方，确保公平对比（架构是唯一变量）
+        # 统一训练配方，确保公平对比（架构是唯一变量）
         lr = LR
         optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-3)
         scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)

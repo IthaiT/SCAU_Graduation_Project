@@ -1,4 +1,4 @@
-"""训练引擎: 早停 + 学习率调度 + 训练/验证循环。"""
+"""训练引擎: 早停 + 学习率调度 + 训练/验证循环 (三分类)。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -50,33 +50,36 @@ def _run_epoch(
     device: torch.device,
     optimizer: torch.optim.Optimizer | None = None,
     max_grad_norm: float = 0.0,
-) -> float:
-    """跑一个 epoch，optimizer 非空则训练模式，否则验证模式。返回平均 loss。"""
+) -> tuple[float, float]:
+    """跑一个 epoch。返回 (avg_loss, accuracy)。"""
     is_train = optimizer is not None
     model.train() if is_train else model.eval()
 
     total_loss = 0.0
+    correct = 0
+    total_samples = 0
     n_batches = 0
 
     ctx = torch.enable_grad() if is_train else torch.no_grad()
     with ctx:
         for X, y in loader:
             X, y = X.to(device), y.to(device)
-            pred, _ = model(X)  # 丢弃 attn_weights
-            loss = criterion(pred, y)
+            logits, _ = model(X)
+            loss = criterion(logits, y)
 
             if is_train:
                 optimizer.zero_grad()
                 loss.backward()
-                # V2: 梯度裁剪，防止梯度爆炸
                 if max_grad_norm > 0:
                     nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                 optimizer.step()
 
             total_loss += loss.item()
+            correct += (logits.argmax(dim=1) == y).sum().item()
+            total_samples += y.size(0)
             n_batches += 1
 
-    return total_loss / max(n_batches, 1)
+    return total_loss / max(n_batches, 1), correct / max(total_samples, 1)
 
 
 # ── 主训练入口 ────────────────────────────────────────────────────
@@ -93,17 +96,21 @@ def train_model(
     scheduler: LRScheduler | None = None,
     max_grad_norm: float = 1.0,
 ) -> dict[str, list[float]]:
-    """完整训练循环，返回 history = {train_loss: [...], val_loss: [...]}。"""
+    """完整训练循环，返回 history = {train_loss, val_loss, train_acc, val_acc}。"""
     model.to(device)
     es = EarlyStopping(patience=patience, save_path=save_path)
-    history: dict[str, list[float]] = {"train_loss": [], "val_loss": []}
+    history: dict[str, list[float]] = {
+        "train_loss": [], "val_loss": [], "train_acc": [], "val_acc": [],
+    }
 
     for epoch in range(1, epochs + 1):
-        train_loss = _run_epoch(model, train_loader, criterion, device, optimizer, max_grad_norm)
-        val_loss = _run_epoch(model, val_loader, criterion, device)
+        train_loss, train_acc = _run_epoch(model, train_loader, criterion, device, optimizer, max_grad_norm)
+        val_loss, val_acc = _run_epoch(model, val_loader, criterion, device)
 
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
+        history["train_acc"].append(train_acc)
+        history["val_acc"].append(val_acc)
 
         # 学习率调度
         if scheduler is not None:
@@ -114,8 +121,8 @@ def train_model(
 
         lr = optimizer.param_groups[0]["lr"]
         logger.info(
-            "Epoch {:>3d}/{} | Train: {:.6f} | Val: {:.6f} | LR: {:.2e}",
-            epoch, epochs, train_loss, val_loss, lr,
+            "Epoch {:>3d}/{} | Loss: {:.4f}/{:.4f} | Acc: {:.2%}/{:.2%} | LR: {:.2e}",
+            epoch, epochs, train_loss, val_loss, train_acc, val_acc, lr,
         )
 
         if es.step(val_loss, model):

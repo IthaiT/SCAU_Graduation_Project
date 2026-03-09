@@ -1,8 +1,8 @@
-"""LSTM / Transformer / LSTM-Transformer 三套时序预测网络。
+"""LSTM / Transformer / LSTM-Transformer / Parallel 四套时序分类网络。
 
 所有模型统一签名:
-    forward(x: Tensor) -> tuple[Tensor, Tensor | None]
-    返回 (predictions, attention_weights)。
+    forward(x: Tensor) -> tuple[Tensor, Tensor | dict | None]
+    返回 (logits, extra_info)。logits 形状 (B, num_classes)。
 """
 from __future__ import annotations
 
@@ -74,16 +74,16 @@ class TransformerEncoder(nn.Module):
 
 # ── Baseline 1: 纯 LSTM ──────────────────────────────────────────
 class LSTMModel(nn.Module):
-    """纯 LSTM 基线。(B, S, F) -> LSTM -> 取 last step -> FC -> (B, pred_len)"""
+    """纯 LSTM 基线。(B, S, F) -> LSTM -> 取 last step -> FC -> (B, num_classes)"""
 
     def __init__(self, input_dim: int, hidden_dim: int = 64, num_layers: int = 2,
-                 pred_len: int = 1, dropout: float = 0.2) -> None:
+                 num_classes: int = 3, dropout: float = 0.2) -> None:
         super().__init__()
         self.lstm = nn.LSTM(
             input_dim, hidden_dim, num_layers=num_layers,
             batch_first=True, dropout=dropout if num_layers > 1 else 0.0,
         )
-        self.fc = nn.Linear(hidden_dim, pred_len)
+        self.fc = nn.Linear(hidden_dim, num_classes)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, None]:
         out, _ = self.lstm(x)
@@ -92,16 +92,16 @@ class LSTMModel(nn.Module):
 
 # ── Baseline 2: 纯 Transformer ───────────────────────────────────
 class TransformerModel(nn.Module):
-    """纯 Transformer 基线。(B, S, F) -> Proj -> PosEnc -> N层Encoder -> FC -> (B, pred_len)"""
+    """纯 Transformer 基线。(B, S, F) -> Proj -> PosEnc -> N层Encoder -> FC -> (B, num_classes)"""
 
     def __init__(self, input_dim: int, d_model: int = 64, num_heads: int = 4,
                  num_layers: int = 2, ffn_dim: int = 256,
-                 pred_len: int = 1, dropout: float = 0.2) -> None:
+                 num_classes: int = 3, dropout: float = 0.2) -> None:
         super().__init__()
         self.proj = nn.Linear(input_dim, d_model)
         self.pe = PositionalEncoding(d_model, dropout=dropout)
         self.encoder = TransformerEncoder(d_model, num_heads, num_layers, ffn_dim, dropout)
-        self.fc = nn.Linear(d_model, pred_len)
+        self.fc = nn.Linear(d_model, num_classes)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x = self.pe(self.proj(x))
@@ -121,7 +121,7 @@ class LSTMTransformerModel(nn.Module):
 
     def __init__(self, input_dim: int, hidden_dim: int = 64, num_lstm_layers: int = 2,
                  num_heads: int = 4, num_transformer_layers: int = 2,
-                 ffn_dim: int = 256, pred_len: int = 1, dropout: float = 0.2) -> None:
+                 ffn_dim: int = 256, num_classes: int = 3, dropout: float = 0.2) -> None:
         super().__init__()
         self.lstm = nn.LSTM(
             input_dim, hidden_dim, num_layers=num_lstm_layers,
@@ -132,12 +132,12 @@ class LSTMTransformerModel(nn.Module):
         self.encoder = TransformerEncoder(
             hidden_dim, num_heads, num_transformer_layers, ffn_dim, dropout,
         )
-        # V4: 门控融合瓶颈网络（替代 V3 的单层 Linear）
+        # V4: 门控融合瓶颈网络
         self.fusion = nn.Sequential(
             nn.Linear(hidden_dim * 2, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim, pred_len),
+            nn.Linear(hidden_dim, num_classes),
         )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -158,7 +158,7 @@ class LSTMTransformerModel(nn.Module):
 class ParallelLSTMTransformerModel(nn.Module):
     def __init__(self, input_dim: int, hidden_dim: int = 64, num_lstm_layers: int = 2,
                  num_heads: int = 4, num_transformer_layers: int = 2,
-                 ffn_dim: int = 256, pred_len: int = 1, dropout: float = 0.2) -> None:
+                 ffn_dim: int = 256, num_classes: int = 3, dropout: float = 0.2) -> None:
         super().__init__()
         
         # === 左塔：LSTM ===
@@ -179,12 +179,12 @@ class ParallelLSTMTransformerModel(nn.Module):
             nn.Sigmoid() # 用 Sigmoid，不要用 Softmax，允许某些特征同时高亮或同时抑制
         )
         
-        # 最终预测头
+        # 最终分类头
         self.predictor = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim // 2, pred_len)
+            nn.Linear(hidden_dim // 2, num_classes)
         )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
