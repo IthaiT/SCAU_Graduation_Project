@@ -1,4 +1,4 @@
-"""验证三套模型的输出张量形状。"""
+"""V5-beta: 验证三套模型的输出张量形状 (LSTM / Transformer / LSTM-mTrans-MLP)。"""
 import sys
 from pathlib import Path
 
@@ -9,13 +9,14 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import torch  # noqa: E402
 
-from src.models import LSTMModel, LSTMTransformerModel, TransformerModel  # noqa: E402
+from src.models import LSTMModel, LSTMmTransMLPModel, TransformerModel  # noqa: E402
 
 logger.remove()
 logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {name} | {level} | {message}")
 
-BATCH, SEQ_LEN, FEATURES = 64, 30, 17
-HIDDEN_DIM, NUM_HEADS, PRED_LEN = 64, 4, 1
+# 论文参数: 仅收盘价 (input_dim=1), seq_len=60
+BATCH, SEQ_LEN, FEATURES = 64, 60, 1
+LSTM_HIDDEN, NUM_HEADS, HEAD_DIM, PRED_LEN = 60, 5, 120, 1
 
 
 def main() -> None:
@@ -23,9 +24,21 @@ def main() -> None:
     logger.info("输入: X {}", tuple(x.shape))
 
     models = {
-        "LSTM": LSTMModel(input_dim=FEATURES, hidden_dim=HIDDEN_DIM, pred_len=PRED_LEN),
-        "Transformer": TransformerModel(input_dim=FEATURES, d_model=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN),
-        "LSTM+Transformer": LSTMTransformerModel(input_dim=FEATURES, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN),
+        "LSTM": LSTMModel(
+            input_dim=FEATURES, hidden_dim=LSTM_HIDDEN,
+            num_layers=2, pred_len=PRED_LEN, dropout=0.1,
+        ),
+        "Transformer": TransformerModel(
+            input_dim=FEATURES, d_model=LSTM_HIDDEN,
+            num_heads=NUM_HEADS, num_layers=2,
+            ffn_dim=128, pred_len=PRED_LEN, dropout=0.15,
+        ),
+        "LSTM-mTrans-MLP": LSTMmTransMLPModel(
+            input_dim=FEATURES, lstm_hidden=LSTM_HIDDEN,
+            num_lstm_layers=2, num_heads=NUM_HEADS,
+            head_dim=HEAD_DIM, ffn_mid=5, pred_len=PRED_LEN,
+            lstm_dropout=0.1, trans_dropout=0.15, mlp_dropout=0.1,
+        ),
     }
 
     for name, model in models.items():
@@ -39,7 +52,9 @@ def main() -> None:
         # 断言形状正确
         assert pred.shape == (BATCH, PRED_LEN), f"{name} pred shape mismatch"
         if attn is not None:
-            assert attn.shape == (BATCH, SEQ_LEN, SEQ_LEN), f"{name} attn shape mismatch"
+            # LSTM-mTrans-MLP: attn (B, lstm_hidden, lstm_hidden)
+            # Transformer: attn (B, SEQ_LEN, SEQ_LEN)
+            assert attn.dim() == 3, f"{name} attn should be 3D"
 
     params = {n: sum(p.numel() for p in m.parameters()) for n, m in models.items()}
     for name, cnt in params.items():

@@ -1,3 +1,3 @@
-from .networks import LSTMModel, LSTMTransformerModel, ParallelLSTMTransformerModel, TransformerModel
+from .networks import LSTMModel, LSTMmTransMLPModel, TransformerModel
 
-__all__ = ["LSTMModel", "TransformerModel", "LSTMTransformerModel", "ParallelLSTMTransformerModel"]
+__all__ = ["LSTMModel", "TransformerModel", "LSTMmTransMLPModel"]

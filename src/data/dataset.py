@@ -75,8 +75,8 @@ class TimeSeriesDataset(Dataset):
 def _split_and_scale(
     values: NDArray[np.float64],
     target_col_idx: int,
-    train_ratio: float = 0.7,
-    val_ratio: float = 0.1,
+    train_ratio: float = 0.80,
+    val_ratio: float = 0.02,
 ) -> SplitArrays:
     """按时间顺序切分 + 仅 train fit 归一化。"""
     n = len(values)
@@ -109,12 +109,12 @@ def _split_and_scale(
 def get_dataloaders(
     df_values: NDArray[np.float64],
     columns: list[str],
-    seq_len: int = 30,
+    seq_len: int = 60,
     pred_len: int = 1,
-    batch_size: int = 64,
+    batch_size: int = 1,
     target_col: str = "close",
-    train_ratio: float = 0.7,
-    val_ratio: float = 0.1,
+    train_ratio: float = 0.80,
+    val_ratio: float = 0.02,
 ) -> Tuple[DataLoader, DataLoader, DataLoader, MinMaxScaler]:
     """一站式构建 train/val/test DataLoader。
 

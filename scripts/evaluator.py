@@ -1,9 +1,9 @@
-"""学术级评估流水线: 加载权重 → 推理 → 指标计算 → 四张论文级图表。
+"""V5-beta 学术级评估流水线: 加载权重 → 推理 → 指标计算 → 四张论文级图表。
 
 生成图表:
     1. 三模型预测值与真实值拟合曲线
     2. 训练/验证 Loss 下降曲线
-    3. Attention 热力图 (LSTM-Transformer 最后一层)
+    3. Attention 热力图 (LSTM-mTrans-MLP 的 mTransformer 注意力)
     4. 预测误差分布直方图
 """
 from __future__ import annotations
@@ -30,8 +30,7 @@ from loguru import logger  # noqa: E402
 from src.data.dataset import get_dataloaders  # noqa: E402
 from src.models.networks import (  # noqa: E402
     LSTMModel,
-    LSTMTransformerModel,
-    ParallelLSTMTransformerModel,
+    LSTMmTransMLPModel,
     TransformerModel,
 )
 
@@ -52,26 +51,27 @@ sns.set_theme(style="whitegrid", font="Microsoft YaHei", palette="muted")
 _COLORS: dict[str, str] = {
     "LSTM": "#4C72B0",
     "Transformer": "#DD8452",
-    "LSTM_Transformer": "#55A868",
-    "Parallel_LSTM_Transformer": "#C44E52",
+    "LSTM_mTrans_MLP": "#55A868",
 }
 _LABELS: dict[str, str] = {
     "LSTM": "LSTM",
     "Transformer": "Transformer",
-    "LSTM_Transformer": "LSTM-Transformer",
-    "Parallel_LSTM_Transformer": "Parallel-LSTM-Transformer",
+    "LSTM_mTrans_MLP": "LSTM-mTrans-MLP",
 }
 
-# ── 超参数 (与 train.py 一致) ────────────────────────────────────
-SEQ_LEN = 30
+# ── 超参数 (与 train.py 一致) ─────────────────────────────────────
+SEQ_LEN = 60
 PRED_LEN = 1
 BATCH_SIZE = 32
-HIDDEN_DIM = 64
-NUM_HEADS = 4
+LSTM_HIDDEN = 60
+NUM_HEADS = 5
+HEAD_DIM = 120
+TRAIN_RATIO = 0.72
+VAL_RATIO = 0.10
 
 MODELS_DIR = PROJECT_ROOT / "models"
 RESULTS_DIR = PROJECT_ROOT / "results"
-MODEL_NAMES = ["LSTM", "Transformer", "LSTM_Transformer", "Parallel_LSTM_Transformer"]
+MODEL_NAMES = ["LSTM", "Transformer", "LSTM_mTrans_MLP"]
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────
@@ -83,12 +83,22 @@ def _save(fig: plt.Figure, path: Path) -> None:
 
 def _build_model(name: str, input_dim: int) -> nn.Module:
     if name == "LSTM":
-        return LSTMModel(input_dim=input_dim, hidden_dim=HIDDEN_DIM, pred_len=PRED_LEN)
+        return LSTMModel(
+            input_dim=input_dim, hidden_dim=LSTM_HIDDEN,
+            num_layers=2, pred_len=PRED_LEN, dropout=0.1,
+        )
     if name == "Transformer":
-        return TransformerModel(input_dim=input_dim, d_model=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN)
-    if name == "Parallel_LSTM_Transformer":
-        return ParallelLSTMTransformerModel(input_dim=input_dim, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN)
-    return LSTMTransformerModel(input_dim=input_dim, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN)
+        return TransformerModel(
+            input_dim=input_dim, d_model=LSTM_HIDDEN,
+            num_heads=NUM_HEADS, num_layers=2,
+            ffn_dim=128, pred_len=PRED_LEN, dropout=0.15,
+        )
+    return LSTMmTransMLPModel(
+        input_dim=input_dim, lstm_hidden=LSTM_HIDDEN,
+        num_lstm_layers=2, num_heads=NUM_HEADS,
+        head_dim=HEAD_DIM, ffn_mid=5, pred_len=PRED_LEN,
+        lstm_dropout=0.1, trans_dropout=0.15, mlp_dropout=0.1,
+    )
 
 
 @torch.no_grad()
@@ -96,24 +106,19 @@ def _inference(
     model: nn.Module,
     loader: torch.utils.data.DataLoader,
     device: torch.device,
-) -> tuple[NDArray[np.float32], NDArray[np.float32], dict[str, NDArray[np.float32] | None]]:
-    """返回 (preds, trues, meta)。meta 包含 attn_w / gate_lstm / gate_trans。"""
+) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32] | None]:
+    """返回 (preds, trues, attn_weights 或 None)。"""
     model.eval()
     preds, trues = [], []
-    meta: dict[str, NDArray[np.float32] | None] = {"attn_w": None, "gate_lstm": None, "gate_trans": None}
+    attn_w_last: NDArray[np.float32] | None = None
     for X, y in loader:
         X, y = X.to(device), y.to(device)
         pred, extra = model(X)
         preds.append(pred.cpu().numpy())
         trues.append(y.cpu().numpy())
-        # extra 可能是 Tensor (attn_w)、dict (含 gate 信息) 或 None
-        if isinstance(extra, dict):
-            meta["attn_w"] = extra["attn_w"][0].cpu().numpy()
-            meta["gate_lstm"] = extra["gate_lstm"].cpu().numpy()
-            meta["gate_trans"] = extra["gate_trans"].cpu().numpy()
-        elif extra is not None:
-            meta["attn_w"] = extra[0].cpu().numpy()
-    return np.concatenate(preds), np.concatenate(trues), meta
+        if extra is not None:
+            attn_w_last = extra[0].cpu().numpy()
+    return np.concatenate(preds), np.concatenate(trues), attn_w_last
 
 
 # ── 指标计算 ──────────────────────────────────────────────────────
@@ -144,7 +149,7 @@ def plot_predictions(
     x = np.arange(len(tail))
     fig, ax = plt.subplots(figsize=(13, 5), constrained_layout=True)
     ax.plot(x, tail, color="black", linewidth=2.0, label="真实值", zorder=5)
-    styles = ["-", "--", "-.", ":"]
+    styles = ["-", "--", "-."]
     for i, (name, pred) in enumerate(preds_dict.items()):
         ax.plot(x, pred[-last_n:], linestyle=styles[i % 3],
                 color=_COLORS.get(name), linewidth=1.4,
@@ -174,7 +179,7 @@ def plot_loss_curves(
         ax.set_title(title)
         ax.legend(frameon=True, fancybox=True, fontsize=9)
         ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, 3))
-    fig.suptitle("四模型训练过程损失对比", fontsize=14, fontweight="bold", y=1.02)
+    fig.suptitle("三模型训练过程损失对比", fontsize=14, fontweight="bold", y=1.02)
     _save(fig, save_path)
 
 
@@ -186,7 +191,7 @@ def plot_attention_heatmap(attn: NDArray, save_path: Path) -> None:
                 cbar_kws={"shrink": 0.82, "label": "权重"})
     ax.set_xlabel("Key 时间步")
     ax.set_ylabel("Query 时间步")
-    ax.set_title("LSTM-Transformer 自注意力权重 (最后一层)", fontsize=13, fontweight="bold")
+    ax.set_title("LSTM-mTrans-MLP 自注意力权重 (mTransformer)", fontsize=13, fontweight="bold")
     _save(fig, save_path)
 
 
@@ -204,44 +209,9 @@ def plot_error_distribution(
     ax.axvline(x=0, color="black", linestyle="--", linewidth=1.0, alpha=0.6)
     ax.set_xlabel("预测误差 (预测值 − 真实值)")
     ax.set_ylabel("频数")
-    ax.set_title("四模型预测误差分布", fontsize=14, fontweight="bold")
+    ax.set_title("三模型预测误差分布", fontsize=14, fontweight="bold")
     ax.legend(frameon=True, fancybox=True, fontsize=9)
     ax.grid(alpha=0.3)
-    _save(fig, save_path)
-
-
-# ── 图5: 动态门控权重分布 ────────────────────────────────────────
-def plot_gate_weights(
-    gate_lstm: NDArray, gate_trans: NDArray, save_path: Path,
-) -> None:
-    """可视化 Parallel 模型的门控权重分布，展示双塔动态加权。"""
-    mean_lstm = gate_lstm.mean(axis=0)  # (hidden_dim,)
-    mean_trans = gate_trans.mean(axis=0)
-
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5), constrained_layout=True)
-
-    # 左图: 每个隐藏维度上两塔的平均门控值
-    ax: plt.Axes = axes[0]
-    dims = np.arange(len(mean_lstm))
-    ax.bar(dims - 0.2, mean_lstm, 0.4, label="LSTM 塔", color="#4C72B0", alpha=0.85)
-    ax.bar(dims + 0.2, mean_trans, 0.4, label="Transformer 塔", color="#DD8452", alpha=0.85)
-    ax.set_xlabel("隐藏维度索引")
-    ax.set_ylabel("平均门控权重 (Sigmoid 输出)")
-    ax.set_title("各隐藏维度的门控权重", fontsize=12, fontweight="bold")
-    ax.legend(frameon=True, fancybox=True, fontsize=9)
-    ax.grid(alpha=0.3, axis="y")
-
-    # 右图: 两塔门控值的整体分布直方图
-    ax2: plt.Axes = axes[1]
-    ax2.hist(gate_lstm.ravel(), bins=50, alpha=0.6, label="LSTM 塔", color="#4C72B0")
-    ax2.hist(gate_trans.ravel(), bins=50, alpha=0.6, label="Transformer 塔", color="#DD8452")
-    ax2.set_xlabel("门控权重值")
-    ax2.set_ylabel("频数")
-    ax2.set_title("门控权重整体分布", fontsize=12, fontweight="bold")
-    ax2.legend(frameon=True, fancybox=True, fontsize=9)
-    ax2.grid(alpha=0.3)
-
-    fig.suptitle("Parallel-LSTM-Transformer 动态门控权重分析", fontsize=14, fontweight="bold", y=1.02)
     _save(fig, save_path)
 
 
@@ -250,39 +220,45 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("评估设备: {}", device)
 
-    # 数据
-    csv_path = PROJECT_ROOT / "data" / "csi300_features.csv"
+    # 数据: 仅收盘价 (单特征)
+    csv_path = PROJECT_ROOT / "data" / "csi300_raw.csv"
     df = pd.read_csv(csv_path, index_col="date", parse_dates=True)
-    columns = df.columns.tolist()
-    num_features = len(columns)
+    df_close = df[["close"]].copy()
+    columns = df_close.columns.tolist()
+    num_features = len(columns)  # = 1
 
     _, _, test_loader, scaler_target = get_dataloaders(
-        df_values=df.values, columns=columns,
+        df_values=df_close.values, columns=columns,
         seq_len=SEQ_LEN, pred_len=PRED_LEN, batch_size=BATCH_SIZE,
+        target_col="close", train_ratio=TRAIN_RATIO, val_ratio=VAL_RATIO,
     )
 
     # ❶ Loss 曲线
     histories: dict[str, dict[str, list[float]]] = {}
     for name in MODEL_NAMES:
         path = MODELS_DIR / f"{name}_history.json"
-        histories[name] = json.loads(path.read_text())
-    plot_loss_curves(histories, RESULTS_DIR / "loss_curves.png")
-    logger.info("✓ 图2: Loss 曲线已保存")
+        if path.exists():
+            histories[name] = json.loads(path.read_text())
+    if histories:
+        plot_loss_curves(histories, RESULTS_DIR / "loss_curves.png")
+        logger.info("✓ 图2: Loss 曲线已保存")
 
     # ❷ 逐模型推理
     all_metrics: dict[str, dict[str, float]] = {}
     preds_real: dict[str, NDArray] = {}
     true_real: NDArray | None = None
     attn_for_heatmap: NDArray | None = None
-    gate_data: dict[str, NDArray | None] = {"gate_lstm": None, "gate_trans": None}
 
     for name in MODEL_NAMES:
         model = _build_model(name, num_features)
         weight_path = MODELS_DIR / f"{name}_best.pth"
+        if not weight_path.exists():
+            logger.warning("权重不存在, 跳过: {}", weight_path)
+            continue
         model.load_state_dict(torch.load(weight_path, map_location=device, weights_only=True))
         model.to(device)
 
-        preds_norm, trues_norm, meta = _inference(model, test_loader, device)
+        preds_norm, trues_norm, attn_w = _inference(model, test_loader, device)
 
         pred_r = scaler_target.inverse_transform(preds_norm).ravel()
         true_r = scaler_target.inverse_transform(trues_norm).ravel()
@@ -296,11 +272,9 @@ def main() -> None:
         logger.info("{} → MSE={:.2f} RMSE={:.2f} MAE={:.2f} R²={:.4f} MAPE={:.2f}% DA={:.2f}%",
                      name, m["MSE"], m["RMSE"], m["MAE"], m["R2"], m["MAPE"], m["DA"])
 
-        if name in ("LSTM_Transformer", "Parallel_LSTM_Transformer") and meta["attn_w"] is not None:
-            attn_for_heatmap = meta["attn_w"]
-        if name == "Parallel_LSTM_Transformer" and meta["gate_lstm"] is not None:
-            gate_data["gate_lstm"] = meta["gate_lstm"]
-            gate_data["gate_trans"] = meta["gate_trans"]
+        # 取 LSTM_mTrans_MLP 的注意力热力图
+        if name == "LSTM_mTrans_MLP" and attn_w is not None:
+            attn_for_heatmap = attn_w
 
     assert true_real is not None
 
@@ -317,13 +291,7 @@ def main() -> None:
     plot_error_distribution(true_real, preds_real, RESULTS_DIR / "error_distribution.png")
     logger.info("✓ 图4: 误差分布直方图已保存")
 
-    # ❻ 门控权重可视化
-    if gate_data["gate_lstm"] is not None:
-        plot_gate_weights(gate_data["gate_lstm"], gate_data["gate_trans"],
-                          RESULTS_DIR / "gate_weights.png")
-        logger.info("✓ 图5: 门控权重分布已保存")
-
-    # ❼ 汇总
+    # ❻ 汇总
     logger.info("=" * 80)
     logger.info("{:<22s} {:>10s} {:>8s} {:>8s} {:>8s} {:>8s} {:>6s}",
                 "Model", "MSE", "RMSE", "MAE", "R²", "MAPE%", "DA%")

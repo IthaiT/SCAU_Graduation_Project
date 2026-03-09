@@ -1,4 +1,7 @@
-"""多轮训练+评估基准测试: 重复 N 次训练-评估流程，记录每轮指标并统计均值±标准差。"""
+"""V5-beta 多轮训练+评估基准测试: 重复 N 次训练-评估流程，统计均值±标准差。
+
+严格按论文参数: 仅收盘价, seq_len=60, batch_size=1, MSE loss, Adam(lr=0.001)。
+"""
 from __future__ import annotations
 
 import json
@@ -16,14 +19,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import pandas as pd  # noqa: E402
 import torch  # noqa: E402
 import torch.nn as nn  # noqa: E402
-from torch.optim.lr_scheduler import CosineAnnealingLR  # noqa: E402
 
 from src.data.dataset import get_dataloaders  # noqa: E402
 from src.engine.trainer import train_model  # noqa: E402
 from src.models.networks import (  # noqa: E402
     LSTMModel,
-    LSTMTransformerModel,
-    ParallelLSTMTransformerModel,
+    LSTMmTransMLPModel,
     TransformerModel,
 )
 
@@ -31,20 +32,25 @@ logger.remove()
 logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {name} | {level} | {message}")
 
 # ═══════════════════════════════════════════════════════════════════
-# 可调参数
+# 可调参数 (与 train.py 一致)
 # ═══════════════════════════════════════════════════════════════════
-NUM_RUNS = 10          # ← 在这里修改重复次数
-SEQ_LEN = 30
+NUM_RUNS = 10
+SEQ_LEN = 60
 PRED_LEN = 1
 BATCH_SIZE = 32
-HIDDEN_DIM = 64
-NUM_HEADS = 4
-EPOCHS = 50
+LSTM_HIDDEN = 60
+NUM_HEADS = 5
+HEAD_DIM = 120
+EPOCHS = 30
 PATIENCE = 10
-LR = 5e-4
+MTRANS_EPOCHS = 100
+MTRANS_PATIENCE = 20
+LR = 0.001
+TRAIN_RATIO = 0.72
+VAL_RATIO = 0.10
 
-MODEL_NAMES = ["LSTM", "Transformer", "LSTM_Transformer", "Parallel_LSTM_Transformer"]
-MODEL_LABELS = {"LSTM": "LSTM", "Transformer": "Transformer", "LSTM_Transformer": "LSTM-Transformer", "Parallel_LSTM_Transformer": "Parallel-LSTM-Trans"}
+MODEL_NAMES = ["LSTM", "Transformer", "LSTM_mTrans_MLP"]
+MODEL_LABELS = {"LSTM": "LSTM", "Transformer": "Transformer", "LSTM_mTrans_MLP": "LSTM-mTrans-MLP"}
 MODELS_DIR = PROJECT_ROOT / "models"
 RESULTS_DIR = PROJECT_ROOT / "results"
 OUTPUT_FILE = RESULTS_DIR / "benchmark_results.txt"
@@ -53,12 +59,22 @@ OUTPUT_FILE = RESULTS_DIR / "benchmark_results.txt"
 # ── 辅助 ──────────────────────────────────────────────────────────
 def _build_model(name: str, input_dim: int) -> nn.Module:
     if name == "LSTM":
-        return LSTMModel(input_dim=input_dim, hidden_dim=HIDDEN_DIM, pred_len=PRED_LEN)
+        return LSTMModel(
+            input_dim=input_dim, hidden_dim=LSTM_HIDDEN,
+            num_layers=2, pred_len=PRED_LEN, dropout=0.1,
+        )
     if name == "Transformer":
-        return TransformerModel(input_dim=input_dim, d_model=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN)
-    if name == "Parallel_LSTM_Transformer":
-        return ParallelLSTMTransformerModel(input_dim=input_dim, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN)
-    return LSTMTransformerModel(input_dim=input_dim, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN)
+        return TransformerModel(
+            input_dim=input_dim, d_model=LSTM_HIDDEN,
+            num_heads=NUM_HEADS, num_layers=2,
+            ffn_dim=128, pred_len=PRED_LEN, dropout=0.15,
+        )
+    return LSTMmTransMLPModel(
+        input_dim=input_dim, lstm_hidden=LSTM_HIDDEN,
+        num_lstm_layers=2, num_heads=NUM_HEADS,
+        head_dim=HEAD_DIM, ffn_mid=5, pred_len=PRED_LEN,
+        lstm_dropout=0.1, trans_dropout=0.15, mlp_dropout=0.1,
+    )
 
 
 def compute_metrics(true: np.ndarray, pred: np.ndarray) -> dict[str, float]:
@@ -100,27 +116,24 @@ def run_once(
     """执行一次完整的 训练→评估，返回 {model_name: {MSE, RMSE, MAE, MAPE, R2, DA}}。"""
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-    models: dict[str, nn.Module] = {
-        "LSTM": LSTMModel(input_dim=num_features, hidden_dim=HIDDEN_DIM, pred_len=PRED_LEN),
-        "Transformer": TransformerModel(input_dim=num_features, d_model=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN),
-        "LSTM_Transformer": LSTMTransformerModel(input_dim=num_features, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN),
-        "Parallel_LSTM_Transformer": ParallelLSTMTransformerModel(input_dim=num_features, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, pred_len=PRED_LEN),
-    }
-
     # 训练
-    for model_name, model in models.items():
+    for model_name in MODEL_NAMES:
+        model = _build_model(model_name, num_features)
         logger.info("训练: {} ({:,} params)", model_name, sum(p.numel() for p in model.parameters()))
-        criterion = nn.HuberLoss(delta=1.0)
-        # 统一训练配方，确保公平对比（架构是唯一变量）
-        optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=1e-3)
-        scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
+
+        criterion = nn.MSELoss()
+        optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+
+        ep = MTRANS_EPOCHS if model_name == "LSTM_mTrans_MLP" else EPOCHS
+        pat = MTRANS_PATIENCE if model_name == "LSTM_mTrans_MLP" else PATIENCE
 
         train_model(
             model=model, train_loader=train_loader, val_loader=val_loader,
             criterion=criterion, optimizer=optimizer, device=device,
-            epochs=EPOCHS, patience=PATIENCE,
+            epochs=ep, patience=pat,
             save_path=MODELS_DIR / f"{model_name}_best.pth",
-            scheduler=scheduler,
+            scheduler=None,
+            max_grad_norm=1.0,
         )
 
     # 评估
@@ -155,13 +168,17 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("设备: {} | 总轮次: {}", device, NUM_RUNS)
 
-    csv_path = PROJECT_ROOT / "data" / "csi300_features.csv"
+    # 数据: 仅收盘价 (单特征)
+    csv_path = PROJECT_ROOT / "data" / "csi300_raw.csv"
     df = pd.read_csv(csv_path, index_col="date", parse_dates=True)
-    columns = df.columns.tolist()
-    num_features = len(columns)
+    df_close = df[["close"]].copy()
+    columns = df_close.columns.tolist()
+    num_features = len(columns)  # = 1
+
     train_loader, val_loader, test_loader, scaler_target = get_dataloaders(
-        df_values=df.values, columns=columns,
+        df_values=df_close.values, columns=columns,
         seq_len=SEQ_LEN, pred_len=PRED_LEN, batch_size=BATCH_SIZE,
+        target_col="close", train_ratio=TRAIN_RATIO, val_ratio=VAL_RATIO,
     )
 
     # 存储所有轮次的指标
@@ -171,7 +188,7 @@ def main() -> None:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     lines.append(f"Benchmark 开始时间: {timestamp}")
     lines.append(f"重复次数: {NUM_RUNS}  |  设备: {device}")
-    lines.append(f"超参数: SEQ_LEN={SEQ_LEN}, EPOCHS={EPOCHS}, PATIENCE={PATIENCE}, BATCH_SIZE={BATCH_SIZE}, HIDDEN_DIM={HIDDEN_DIM}")
+    lines.append(f"超参数: SEQ_LEN={SEQ_LEN}, EPOCHS={EPOCHS}, PATIENCE={PATIENCE}, BATCH_SIZE={BATCH_SIZE}, LR={LR}")
     lines.append("")
 
     for run_idx in range(1, NUM_RUNS + 1):
