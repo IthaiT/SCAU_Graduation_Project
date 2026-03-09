@@ -11,7 +11,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import pandas as pd  # noqa: E402
 import torch  # noqa: E402
 import torch.nn as nn  # noqa: E402
-from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau  # noqa: E402
+from torch.optim.lr_scheduler import CosineAnnealingLR  # noqa: E402
 
 from src.data.dataset import get_dataloaders  # noqa: E402
 from src.engine.trainer import train_model  # noqa: E402
@@ -33,7 +33,7 @@ HIDDEN_DIM = 64
 NUM_HEADS = 4
 EPOCHS = 50
 PATIENCE = 10
-LR = 1e-3
+LR = 5e-4
 
 
 def main() -> None:
@@ -71,15 +71,10 @@ def main() -> None:
 
         criterion = nn.HuberLoss(delta=1.0)  # V4: 鲁棒损失，抑制异常值极端梯度
 
-        # V2: 融合模型使用更低的学习率 + CosineAnnealing，基线保持原配置
-        if model_name in ("LSTM_Transformer", "Parallel_LSTM_Transformer"):
-            lr = 5e-4
-            optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-3)  # V3: L2 正则化
-            scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
-        else:
-            lr = LR
-            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-            scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
+        # V5: 统一训练配方，确保公平对比（架构是唯一变量）
+        lr = LR
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-3)
+        scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
 
         logger.info("  LR={:.1e}, Scheduler={}", lr, type(scheduler).__name__)
 

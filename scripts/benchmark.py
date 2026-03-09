@@ -16,7 +16,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import pandas as pd  # noqa: E402
 import torch  # noqa: E402
 import torch.nn as nn  # noqa: E402
-from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau  # noqa: E402
+from torch.optim.lr_scheduler import CosineAnnealingLR  # noqa: E402
 
 from src.data.dataset import get_dataloaders  # noqa: E402
 from src.engine.trainer import train_model  # noqa: E402
@@ -41,7 +41,7 @@ HIDDEN_DIM = 64
 NUM_HEADS = 4
 EPOCHS = 50
 PATIENCE = 10
-LR = 1e-3
+LR = 5e-4
 
 MODEL_NAMES = ["LSTM", "Transformer", "LSTM_Transformer", "Parallel_LSTM_Transformer"]
 MODEL_LABELS = {"LSTM": "LSTM", "Transformer": "Transformer", "LSTM_Transformer": "LSTM-Transformer", "Parallel_LSTM_Transformer": "Parallel-LSTM-Trans"}
@@ -111,14 +111,9 @@ def run_once(
     for model_name, model in models.items():
         logger.info("训练: {} ({:,} params)", model_name, sum(p.numel() for p in model.parameters()))
         criterion = nn.HuberLoss(delta=1.0)
-        if model_name in ("LSTM_Transformer", "Parallel_LSTM_Transformer"):
-            lr = 5e-4
-            optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-3)
-            scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
-        else:
-            lr = LR
-            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-            scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
+        # 统一训练配方，确保公平对比（架构是唯一变量）
+        optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=1e-3)
+        scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
 
         train_model(
             model=model, train_loader=train_loader, val_loader=val_loader,
