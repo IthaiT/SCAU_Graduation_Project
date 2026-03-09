@@ -1,4 +1,4 @@
-"""训练引擎: 早停 + 学习率调度 + 训练/验证循环 (三分类)。"""
+"""Training engine: early stopping + LR scheduling + train/val loop (binary classification)."""
 from __future__ import annotations
 
 from pathlib import Path

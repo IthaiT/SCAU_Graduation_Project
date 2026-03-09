@@ -1,11 +1,11 @@
-"""学术级评估流水线: 加载权重 → 推理 → 分类指标 → 论文级图表。
+"""Academic-grade evaluation pipeline for binary classification.
 
-生成图表:
-    1. 四模型混淆矩阵 (2×2 子图)
-    2. Accuracy / Macro-F1 对比柱状图
-    3. 训练 Loss & Accuracy 曲线 (2×2 子图)
-    4. Attention 热力图 (LSTM-Transformer 最后一层)
-    5. 门控权重分布 (Parallel 模型)
+Generates publication-ready plots (IEEE/Nature aesthetic, 300+ DPI):
+    1. 2×2 Binary Confusion Matrices
+    2. ROC Curves with AUC (all models, single chart)
+    3. Precision-Recall Curves (all models, single chart)
+    4. Training Loss & Accuracy learning curves (2×2)
+    5. Attention heatmap + Gate weight distributions
 """
 from __future__ import annotations
 
@@ -17,9 +17,12 @@ import numpy as np
 from numpy.typing import NDArray
 from sklearn.metrics import (
     accuracy_score,
+    auc,
     classification_report,
     confusion_matrix,
     f1_score,
+    precision_recall_curve,
+    roc_curve,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -44,22 +47,31 @@ from src.models.networks import (  # noqa: E402
 logger.remove()
 logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {name} | {level} | {message}")
 
-# ── 全局绘图风格 ──────────────────────────────────────────────────
+# ── Unified plot style (IEEE/Nature aesthetic) ────────────────────
 matplotlib.rcParams.update({
+    "font.family": "serif",
+    "font.serif": ["Times New Roman", "DejaVu Serif"],
     "font.sans-serif": ["Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "DejaVu Sans"],
     "axes.unicode_minus": False,
     "figure.dpi": 150,
     "savefig.dpi": 300,
     "savefig.bbox": "tight",
-    "savefig.pad_inches": 0.15,
+    "savefig.pad_inches": 0.1,
+    "axes.linewidth": 0.8,
+    "axes.labelsize": 11,
+    "axes.titlesize": 12,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
+    "legend.fontsize": 9,
+    "legend.framealpha": 0.9,
 })
-sns.set_theme(style="whitegrid", font="Microsoft YaHei", palette="muted")
+sns.set_theme(style="whitegrid", palette="colorblind", rc=matplotlib.rcParams)
 
-_COLORS: dict[str, str] = {
-    "LSTM": "#4C72B0",
-    "Transformer": "#DD8452",
-    "LSTM_Transformer": "#55A868",
-    "Parallel_LSTM_Transformer": "#C44E52",
+_PALETTE: dict[str, str] = {
+    "LSTM": "#0173B2",
+    "Transformer": "#DE8F05",
+    "LSTM_Transformer": "#029E73",
+    "Parallel_LSTM_Transformer": "#D55E00",
 }
 _LABELS: dict[str, str] = {
     "LSTM": "LSTM",
@@ -67,11 +79,10 @@ _LABELS: dict[str, str] = {
     "LSTM_Transformer": "LSTM-Transformer",
     "Parallel_LSTM_Transformer": "Parallel-LSTM-Transformer",
 }
-_CLASS_NAMES = ["跌 (Drop)", "平 (Flat)", "涨 (Rise)"]
+_CLASS_NAMES = ["Drop (0)", "Rise (1)"]
 
-# ── 超参数 (与 train.py 一致) ────────────────────────────────────
 SEQ_LEN = 30
-NUM_CLASSES = 3
+NUM_CLASSES = 2
 BATCH_SIZE = 32
 HIDDEN_DIM = 64
 NUM_HEADS = 4
@@ -81,7 +92,6 @@ RESULTS_DIR = PROJECT_ROOT / "results"
 MODEL_NAMES = ["LSTM", "Transformer", "LSTM_Transformer", "Parallel_LSTM_Transformer"]
 
 
-# ── 工具函数 ──────────────────────────────────────────────────────
 def _save(fig: plt.Figure, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path)
@@ -89,13 +99,14 @@ def _save(fig: plt.Figure, path: Path) -> None:
 
 
 def _build_model(name: str, input_dim: int) -> nn.Module:
+    common = dict(input_dim=input_dim, hidden_dim=HIDDEN_DIM, num_classes=NUM_CLASSES)
     if name == "LSTM":
-        return LSTMModel(input_dim=input_dim, hidden_dim=HIDDEN_DIM, num_classes=NUM_CLASSES)
+        return LSTMModel(**common)
     if name == "Transformer":
         return TransformerModel(input_dim=input_dim, d_model=HIDDEN_DIM, num_heads=NUM_HEADS, num_classes=NUM_CLASSES)
     if name == "Parallel_LSTM_Transformer":
-        return ParallelLSTMTransformerModel(input_dim=input_dim, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, num_classes=NUM_CLASSES)
-    return LSTMTransformerModel(input_dim=input_dim, hidden_dim=HIDDEN_DIM, num_heads=NUM_HEADS, num_classes=NUM_CLASSES)
+        return ParallelLSTMTransformerModel(**common, num_heads=NUM_HEADS)
+    return LSTMTransformerModel(**common, num_heads=NUM_HEADS)
 
 
 @torch.no_grad()
@@ -103,26 +114,30 @@ def _inference(
     model: nn.Module,
     loader: torch.utils.data.DataLoader,
     device: torch.device,
-) -> tuple[NDArray[np.int64], NDArray[np.int64], dict[str, NDArray[np.float32] | None]]:
-    """返回 (pred_labels, true_labels, meta)。"""
+) -> tuple[NDArray, NDArray, NDArray, dict[str, NDArray | None]]:
+    """Returns (pred_labels, true_labels, prob_positive, meta)."""
     model.eval()
-    all_preds, all_trues = [], []
-    meta: dict[str, NDArray[np.float32] | None] = {"attn_w": None, "gate_lstm": None, "gate_trans": None}
+    all_preds, all_trues, all_probs = [], [], []
+    meta: dict[str, NDArray | None] = {"attn_w": None, "gate_lstm": None, "gate_trans": None}
+
     for X, y in loader:
         X, y = X.to(device), y.to(device)
         logits, extra = model(X)
+        probs = torch.softmax(logits, dim=1)
+        all_probs.append(probs[:, 1].cpu().numpy())
         all_preds.append(logits.argmax(dim=1).cpu().numpy())
         all_trues.append(y.cpu().numpy())
+
         if isinstance(extra, dict):
             meta["attn_w"] = extra["attn_w"][0].cpu().numpy()
             meta["gate_lstm"] = extra["gate_lstm"].cpu().numpy()
             meta["gate_trans"] = extra["gate_trans"].cpu().numpy()
         elif extra is not None:
             meta["attn_w"] = extra[0].cpu().numpy()
-    return np.concatenate(all_preds), np.concatenate(all_trues), meta
+
+    return np.concatenate(all_preds), np.concatenate(all_trues), np.concatenate(all_probs), meta
 
 
-# ── 指标计算 ──────────────────────────────────────────────────────
 def compute_metrics(true: NDArray, pred: NDArray) -> dict[str, float]:
     return {
         "Accuracy": round(float(accuracy_score(true, pred)), 4),
@@ -131,97 +146,119 @@ def compute_metrics(true: NDArray, pred: NDArray) -> dict[str, float]:
     }
 
 
-# ── 图1: 混淆矩阵 (2×2) ─────────────────────────────────────────
+# ── Plot 1: 2×2 Confusion Matrices ──────────────────────────────
 def plot_confusion_matrices(
-    true: NDArray,
-    preds_dict: dict[str, NDArray],
-    save_path: Path,
+    true: NDArray, preds_dict: dict[str, NDArray], save_path: Path,
 ) -> None:
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10), constrained_layout=True)
+    fig, axes = plt.subplots(2, 2, figsize=(9, 8), constrained_layout=True)
     for ax, (name, pred) in zip(axes.ravel(), preds_dict.items()):
-        cm = confusion_matrix(true, pred, labels=[0, 1, 2])
-        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax,
+        cm = confusion_matrix(true, pred, labels=[0, 1])
+        cm_pct = cm.astype(float) / cm.sum() * 100
+        annot = np.array([[f"{v}\n({p:.1f}%)" for v, p in zip(row_v, row_p)]
+                          for row_v, row_p in zip(cm, cm_pct)])
+        sns.heatmap(cm, annot=annot, fmt="", cmap="Blues", ax=ax,
                     xticklabels=_CLASS_NAMES, yticklabels=_CLASS_NAMES,
-                    linewidths=0.5, linecolor="white")
-        ax.set_title(_LABELS.get(name, name), fontsize=12, fontweight="bold")
-        ax.set_xlabel("预测标签")
-        ax.set_ylabel("真实标签")
-    fig.suptitle("四模型混淆矩阵对比", fontsize=14, fontweight="bold", y=1.02)
+                    linewidths=0.8, linecolor="white", cbar_kws={"shrink": 0.75})
+        ax.set_title(_LABELS[name], fontweight="bold")
+        ax.set_xlabel("Predicted")
+        ax.set_ylabel("Actual")
+    fig.suptitle("Binary Confusion Matrices", fontsize=14, fontweight="bold")
     _save(fig, save_path)
 
 
-# ── 图2: Accuracy & F1 柱状图 ────────────────────────────────────
-def plot_metrics_bar(
-    metrics_dict: dict[str, dict[str, float]],
+# ── Plot 2: ROC Curves ──────────────────────────────────────────
+def plot_roc_curves(
+    true: NDArray,
+    probs_dict: dict[str, NDArray],
     save_path: Path,
 ) -> None:
-    names = list(metrics_dict.keys())
-    labels = [_LABELS.get(n, n) for n in names]
-    acc = [metrics_dict[n]["Accuracy"] for n in names]
-    f1 = [metrics_dict[n]["Macro-F1"] for n in names]
+    fig, ax = plt.subplots(figsize=(7, 6), constrained_layout=True)
+    for name, probs in probs_dict.items():
+        fpr, tpr, _ = roc_curve(true, probs)
+        roc_auc = auc(fpr, tpr)
+        ax.plot(fpr, tpr, color=_PALETTE[name], lw=2.0, alpha=0.9,
+                label=f"{_LABELS[name]} (AUC = {roc_auc:.4f})")
 
-    x = np.arange(len(names))
-    width = 0.35
-    fig, ax = plt.subplots(figsize=(10, 6), constrained_layout=True)
-    bars1 = ax.bar(x - width / 2, acc, width, label="Accuracy", color="#4C72B0", alpha=0.85)
-    bars2 = ax.bar(x + width / 2, f1, width, label="Macro-F1", color="#DD8452", alpha=0.85)
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, fontsize=10)
-    ax.set_ylabel("Score")
-    ax.set_title("四模型分类性能对比", fontsize=14, fontweight="bold")
-    ax.legend(frameon=True, fancybox=True, fontsize=10)
-    ax.set_ylim(0, 1.08)
-    ax.grid(alpha=0.3, axis="y")
-    for bar in bars1:
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
-                f"{bar.get_height():.3f}", ha="center", fontsize=9)
-    for bar in bars2:
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
-                f"{bar.get_height():.3f}", ha="center", fontsize=9)
+    ax.plot([0, 1], [0, 1], "k--", lw=1.0, alpha=0.5, label="Random (AUC = 0.5)")
+    ax.set_xlabel("False Positive Rate")
+    ax.set_ylabel("True Positive Rate")
+    ax.set_title("Receiver Operating Characteristic (ROC)", fontweight="bold")
+    ax.legend(loc="lower right", frameon=True, fancybox=True)
+    ax.set_xlim(-0.02, 1.02)
+    ax.set_ylim(-0.02, 1.02)
+    ax.set_aspect("equal")
+    ax.grid(alpha=0.3)
     _save(fig, save_path)
 
 
-# ── 图3: Loss & Accuracy 训练曲线 (2×2) ──────────────────────────
-def plot_loss_accuracy_curves(
+# ── Plot 3: Precision-Recall Curves ─────────────────────────────
+def plot_pr_curves(
+    true: NDArray,
+    probs_dict: dict[str, NDArray],
+    save_path: Path,
+) -> None:
+    fig, ax = plt.subplots(figsize=(7, 6), constrained_layout=True)
+    baseline = true.sum() / len(true)
+
+    for name, probs in probs_dict.items():
+        precision, recall, _ = precision_recall_curve(true, probs)
+        pr_auc = auc(recall, precision)
+        ax.plot(recall, precision, color=_PALETTE[name], lw=2.0, alpha=0.9,
+                label=f"{_LABELS[name]} (AP = {pr_auc:.4f})")
+
+    ax.axhline(y=baseline, color="k", ls="--", lw=1.0, alpha=0.5,
+               label=f"Baseline ({baseline:.3f})")
+    ax.set_xlabel("Recall")
+    ax.set_ylabel("Precision")
+    ax.set_title("Precision-Recall Curves", fontweight="bold")
+    ax.legend(loc="upper right", frameon=True, fancybox=True)
+    ax.set_xlim(-0.02, 1.02)
+    ax.set_ylim(0, 1.05)
+    ax.grid(alpha=0.3)
+    _save(fig, save_path)
+
+
+# ── Plot 4: Learning Curves ─────────────────────────────────────
+def plot_learning_curves(
     histories: dict[str, dict[str, list[float]]],
     save_path: Path,
 ) -> None:
     panels = [
-        ("train_loss", "训练损失", "CrossEntropy Loss"),
-        ("val_loss", "验证损失", "CrossEntropy Loss"),
-        ("train_acc", "训练准确率", "Accuracy"),
-        ("val_acc", "验证准确率", "Accuracy"),
+        ("train_loss", "Training Loss", "CrossEntropy Loss"),
+        ("val_loss", "Validation Loss", "CrossEntropy Loss"),
+        ("train_acc", "Training Accuracy", "Accuracy"),
+        ("val_acc", "Validation Accuracy", "Accuracy"),
     ]
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10), constrained_layout=True)
+    fig, axes = plt.subplots(2, 2, figsize=(12, 9), constrained_layout=True)
     for ax, (key, title, ylabel) in zip(axes.ravel(), panels):
         for name, hist in histories.items():
             if key not in hist:
                 continue
             epochs = range(1, len(hist[key]) + 1)
             ax.plot(epochs, hist[key], label=_LABELS.get(name, name),
-                    color=_COLORS.get(name), linewidth=1.6, alpha=0.9)
+                    color=_PALETTE.get(name), lw=1.8, alpha=0.85)
         ax.set_xlabel("Epoch")
         ax.set_ylabel(ylabel)
-        ax.set_title(title, fontsize=12, fontweight="bold")
-        ax.legend(frameon=True, fancybox=True, fontsize=9)
+        ax.set_title(title, fontweight="bold")
+        ax.legend(frameon=True, fancybox=True)
         ax.grid(alpha=0.3)
-    fig.suptitle("四模型训练过程对比", fontsize=14, fontweight="bold", y=1.02)
+    fig.suptitle("Training & Validation Learning Curves", fontsize=14, fontweight="bold")
     _save(fig, save_path)
 
 
-# ── 图4: Attention 热力图 ────────────────────────────────────────
+# ── Plot 5a: Attention Heatmap ───────────────────────────────────
 def plot_attention_heatmap(attn: NDArray, save_path: Path) -> None:
     fig, ax = plt.subplots(figsize=(7, 6), constrained_layout=True)
     sns.heatmap(attn, ax=ax, cmap="YlOrRd", square=True,
-                xticklabels=5, yticklabels=5, linewidths=0.15, linecolor="white",
-                cbar_kws={"shrink": 0.82, "label": "权重"})
-    ax.set_xlabel("Key 时间步")
-    ax.set_ylabel("Query 时间步")
-    ax.set_title("LSTM-Transformer 自注意力权重 (最后一层)", fontsize=13, fontweight="bold")
+                xticklabels=5, yticklabels=5, linewidths=0.1, linecolor="white",
+                cbar_kws={"shrink": 0.8, "label": "Weight"})
+    ax.set_xlabel("Key Timestep")
+    ax.set_ylabel("Query Timestep")
+    ax.set_title("Self-Attention Weights (Last Layer)", fontweight="bold")
     _save(fig, save_path)
 
 
-# ── 图5: 动态门控权重分布 ────────────────────────────────────────
+# ── Plot 5b: Gate Weight Distributions ───────────────────────────
 def plot_gate_weights(
     gate_lstm: NDArray, gate_trans: NDArray, save_path: Path,
 ) -> None:
@@ -230,56 +267,54 @@ def plot_gate_weights(
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5), constrained_layout=True)
 
-    ax: plt.Axes = axes[0]
     dims = np.arange(len(mean_lstm))
-    ax.bar(dims - 0.2, mean_lstm, 0.4, label="LSTM 塔", color="#4C72B0", alpha=0.85)
-    ax.bar(dims + 0.2, mean_trans, 0.4, label="Transformer 塔", color="#DD8452", alpha=0.85)
-    ax.set_xlabel("隐藏维度索引")
-    ax.set_ylabel("平均门控权重 (Sigmoid 输出)")
-    ax.set_title("各隐藏维度的门控权重", fontsize=12, fontweight="bold")
-    ax.legend(frameon=True, fancybox=True, fontsize=9)
-    ax.grid(alpha=0.3, axis="y")
+    width = 0.4
+    axes[0].bar(dims - width / 2, mean_lstm, width, label="LSTM Tower", color=_PALETTE["LSTM"], alpha=0.85)
+    axes[0].bar(dims + width / 2, mean_trans, width, label="Transformer Tower", color=_PALETTE["Transformer"], alpha=0.85)
+    axes[0].set_xlabel("Hidden Dimension Index")
+    axes[0].set_ylabel("Mean Gate Weight")
+    axes[0].set_title("Per-Dimension Gate Allocation", fontweight="bold")
+    axes[0].legend(frameon=True, fancybox=True)
+    axes[0].grid(alpha=0.3, axis="y")
 
-    ax2: plt.Axes = axes[1]
-    ax2.hist(gate_lstm.ravel(), bins=50, alpha=0.6, label="LSTM 塔", color="#4C72B0")
-    ax2.hist(gate_trans.ravel(), bins=50, alpha=0.6, label="Transformer 塔", color="#DD8452")
-    ax2.set_xlabel("门控权重值")
-    ax2.set_ylabel("频数")
-    ax2.set_title("门控权重整体分布", fontsize=12, fontweight="bold")
-    ax2.legend(frameon=True, fancybox=True, fontsize=9)
-    ax2.grid(alpha=0.3)
+    axes[1].hist(gate_lstm.ravel(), bins=50, alpha=0.65, label="LSTM Tower", color=_PALETTE["LSTM"])
+    axes[1].hist(gate_trans.ravel(), bins=50, alpha=0.65, label="Transformer Tower", color=_PALETTE["Transformer"])
+    axes[1].set_xlabel("Gate Weight Value")
+    axes[1].set_ylabel("Frequency")
+    axes[1].set_title("Gate Weight Distribution", fontweight="bold")
+    axes[1].legend(frameon=True, fancybox=True)
+    axes[1].grid(alpha=0.3)
 
-    fig.suptitle("Parallel-LSTM-Transformer 动态门控权重分析", fontsize=14, fontweight="bold", y=1.02)
+    fig.suptitle("Parallel-LSTM-Transformer: Complementary Gate Analysis",
+                 fontsize=13, fontweight="bold")
     _save(fig, save_path)
 
 
-# ── 主流程 ────────────────────────────────────────────────────────
+# ── Main pipeline ────────────────────────────────────────────────
 def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("评估设备: {}", device)
+    logger.info("Device: {}", device)
 
-    # 数据
     csv_path = PROJECT_ROOT / "data" / "csi300_features.csv"
     df = pd.read_csv(csv_path, index_col="date", parse_dates=True)
-    columns = df.columns.tolist()
-    num_features = len(columns)
+    num_features = len(df.columns)
 
-    _, _, test_loader = get_dataloaders(
-        df_values=df.values, columns=columns,
-        seq_len=SEQ_LEN, batch_size=BATCH_SIZE,
-    )
+    _, _, test_loader = get_dataloaders(df=df, seq_len=SEQ_LEN, batch_size=BATCH_SIZE)
 
-    # ❶ Loss & Accuracy 曲线
+    # Load training histories
     histories: dict[str, dict[str, list[float]]] = {}
     for name in MODEL_NAMES:
         path = MODELS_DIR / f"{name}_history.json"
-        histories[name] = json.loads(path.read_text())
-    plot_loss_accuracy_curves(histories, RESULTS_DIR / "loss_accuracy_curves.png")
-    logger.info("✓ 图3: Loss & Accuracy 曲线已保存")
+        if path.exists():
+            histories[name] = json.loads(path.read_text())
+    if histories:
+        plot_learning_curves(histories, RESULTS_DIR / "learning_curves.png")
+        logger.info("Plot 4: Learning curves saved")
 
-    # ❷ 逐模型推理
+    # Per-model inference
     all_metrics: dict[str, dict[str, float]] = {}
     preds_dict: dict[str, NDArray] = {}
+    probs_dict: dict[str, NDArray] = {}
     true_labels: NDArray | None = None
     attn_for_heatmap: NDArray | None = None
     gate_data: dict[str, NDArray | None] = {"gate_lstm": None, "gate_trans": None}
@@ -287,18 +322,22 @@ def main() -> None:
     for name in MODEL_NAMES:
         model = _build_model(name, num_features)
         weight_path = MODELS_DIR / f"{name}_best.pth"
+        if not weight_path.exists():
+            logger.warning("Skipping {} — weights not found", name)
+            continue
         model.load_state_dict(torch.load(weight_path, map_location=device, weights_only=True))
         model.to(device)
 
-        preds, trues, meta = _inference(model, test_loader, device)
+        preds, trues, probs, meta = _inference(model, test_loader, device)
         preds_dict[name] = preds
+        probs_dict[name] = probs
         if true_labels is None:
             true_labels = trues
 
         m = compute_metrics(trues, preds)
         all_metrics[name] = m
-        logger.info("{} → Accuracy={:.4f}  Macro-F1={:.4f}  Weighted-F1={:.4f}",
-                     name, m["Accuracy"], m["Macro-F1"], m["Weighted-F1"])
+        logger.info("{} → Acc={:.4f}  Macro-F1={:.4f}  W-F1={:.4f}",
+                     _LABELS[name], m["Accuracy"], m["Macro-F1"], m["Weighted-F1"])
 
         if name in ("LSTM_Transformer", "Parallel_LSTM_Transformer") and meta["attn_w"] is not None:
             attn_for_heatmap = meta["attn_w"]
@@ -308,47 +347,53 @@ def main() -> None:
 
     assert true_labels is not None
 
-    # ❸ 图1: 混淆矩阵
+    # Plot 1: Confusion matrices
     plot_confusion_matrices(true_labels, preds_dict, RESULTS_DIR / "confusion_matrices.png")
-    logger.info("✓ 图1: 混淆矩阵已保存")
+    logger.info("Plot 1: Confusion matrices saved")
 
-    # ❹ 图2: Accuracy & F1 柱状图
-    plot_metrics_bar(all_metrics, RESULTS_DIR / "metrics_bar.png")
-    logger.info("✓ 图2: 分类性能柱状图已保存")
+    # Plot 2: ROC curves
+    plot_roc_curves(true_labels, probs_dict, RESULTS_DIR / "roc_curves.png")
+    logger.info("Plot 2: ROC curves saved")
 
-    # ❺ 图4: Attention 热力图
+    # Plot 3: PR curves
+    plot_pr_curves(true_labels, probs_dict, RESULTS_DIR / "pr_curves.png")
+    logger.info("Plot 3: PR curves saved")
+
+    # Plot 5a: Attention heatmap
     if attn_for_heatmap is not None:
         plot_attention_heatmap(attn_for_heatmap, RESULTS_DIR / "attention_heatmap.png")
-        logger.info("✓ 图4: Attention 热力图已保存")
+        logger.info("Plot 5a: Attention heatmap saved")
 
-    # ❻ 门控权重可视化
+    # Plot 5b: Gate weights
     if gate_data["gate_lstm"] is not None:
         plot_gate_weights(gate_data["gate_lstm"], gate_data["gate_trans"],
                           RESULTS_DIR / "gate_weights.png")
-        logger.info("✓ 图5: 门控权重分布已保存")
+        logger.info("Plot 5b: Gate weight distribution saved")
 
-    # ❼ Classification Report
+    # Classification report
     report_lines: list[str] = []
     for name in MODEL_NAMES:
+        if name not in preds_dict:
+            continue
         report_lines.append("=" * 60)
-        report_lines.append(f"  {_LABELS.get(name, name)}")
+        report_lines.append(f"  {_LABELS[name]}")
         report_lines.append("=" * 60)
         report_lines.append(classification_report(
             true_labels, preds_dict[name], target_names=_CLASS_NAMES,
         ))
     report_path = RESULTS_DIR / "classification_reports.txt"
     report_path.write_text("\n".join(report_lines), encoding="utf-8")
-    logger.info("✓ 分类报告已保存 → {}", report_path)
+    logger.info("Classification report saved → {}", report_path)
 
-    # ❽ 汇总
+    # Summary table
     logger.info("=" * 70)
     logger.info("{:<28s} {:>10s} {:>10s} {:>12s}", "Model", "Accuracy", "Macro-F1", "Weighted-F1")
     logger.info("-" * 70)
     for name, m in all_metrics.items():
         logger.info("{:<28s} {:>10.4f} {:>10.4f} {:>12.4f}",
-                     _LABELS.get(name, name), m["Accuracy"], m["Macro-F1"], m["Weighted-F1"])
+                     _LABELS[name], m["Accuracy"], m["Macro-F1"], m["Weighted-F1"])
     logger.info("=" * 70)
-    logger.info("所有图表已保存至 {}", RESULTS_DIR)
+    logger.info("All plots saved to {}", RESULTS_DIR)
 
 
 if __name__ == "__main__":

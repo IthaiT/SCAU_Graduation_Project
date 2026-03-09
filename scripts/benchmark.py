@@ -1,4 +1,4 @@
-"""多轮训练+评估基准测试 (三分类版): 重复 N 次，统计 Accuracy/F1 均值±标准差。"""
+"""Multi-run benchmark (binary classification): N repeats, report mean±std."""
 from __future__ import annotations
 
 import json
@@ -35,7 +35,7 @@ logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {name} | {level} | {
 # ═══════════════════════════════════════════════════════════════════
 NUM_RUNS = 10
 SEQ_LEN = 30
-NUM_CLASSES = 3
+NUM_CLASSES = 2
 BATCH_SIZE = 32
 HIDDEN_DIM = 64
 NUM_HEADS = 4
@@ -134,11 +134,9 @@ def main() -> None:
 
     csv_path = PROJECT_ROOT / "data" / "csi300_features.csv"
     df = pd.read_csv(csv_path, index_col="date", parse_dates=True)
-    columns = df.columns.tolist()
-    num_features = len(columns)
+    num_features = len(df.columns)
     train_loader, val_loader, test_loader = get_dataloaders(
-        df_values=df.values, columns=columns,
-        seq_len=SEQ_LEN, batch_size=BATCH_SIZE,
+        df=df, seq_len=SEQ_LEN, batch_size=BATCH_SIZE,
     )
 
     all_runs: list[dict[str, dict[str, float]]] = []

@@ -1,4 +1,4 @@
-"""四模型对比训练: LSTM / Transformer / LSTM-Transformer / Parallel (三分类)。"""
+"""Four-model comparative training: LSTM / Transformer / LSTM-Transformer / Parallel (binary)."""
 import json
 import sys
 from pathlib import Path
@@ -25,9 +25,9 @@ from src.models.networks import (  # noqa: E402
 logger.remove()
 logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {name} | {level} | {message}")
 
-# ── 超参数 ────────────────────────────────────────────────────────
+# ── Hyperparameters ───────────────────────────────────────────────
 SEQ_LEN = 30
-NUM_CLASSES = 3
+NUM_CLASSES = 2
 BATCH_SIZE = 32
 HIDDEN_DIM = 64
 NUM_HEADS = 4
@@ -43,12 +43,10 @@ def main() -> None:
     # 数据
     csv_path = PROJECT_ROOT / "data" / "csi300_features.csv"
     df = pd.read_csv(csv_path, index_col="date", parse_dates=True)
-    columns = df.columns.tolist()
-    num_features = len(columns)
+    num_features = len(df.columns)
 
     train_loader, val_loader, test_loader = get_dataloaders(
-        df_values=df.values,
-        columns=columns,
+        df=df,
         seq_len=SEQ_LEN,
         batch_size=BATCH_SIZE,
     )
