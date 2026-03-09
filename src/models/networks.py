@@ -187,28 +187,22 @@ class ParallelLSTMTransformerModel(nn.Module):
             nn.Linear(hidden_dim // 2, pred_len)
         )
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        # 1. 跑左塔
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        # 左塔: LSTM
         out_lstm, _ = self.lstm(x)
-        feat_lstm = self.ln_lstm(out_lstm[:, -1, :])  # LSTM取最后一步
-        
-        # 2. 跑右塔 (修复：改用 Global Average Pooling)
+        feat_lstm = self.ln_lstm(out_lstm[:, -1, :])
+
+        # 右塔: Transformer + Global Average Pooling
         out_trans = self.pe(self.proj(x))
         out_trans, attn_w = self.encoder(out_trans)
-        # 用时间维度的平均值代表全局特征，而不是只看最后一步
-        feat_trans = self.ln_trans(out_trans.mean(dim=1)) 
+        feat_trans = self.ln_trans(out_trans.mean(dim=1))
 
-        # 3. 动态门控融合 (核心创新点)
-        concat_feats = torch.cat([feat_lstm, feat_trans], dim=-1) # (B, 128)
-        gate_weights = self.gate(concat_feats) # (B, 128)
-        
-        # 拆分成两个 (B, 64) 的权重向量
-        gate_lstm, gate_trans = gate_weights.chunk(2, dim=-1) 
-        
-        # 逐元素相乘（Hadamard Product）：让模型在 64 个维度上细粒度地挑选特征
-        fused_feat = gate_lstm * feat_lstm + gate_trans * feat_trans
-        
-        # 4. 预测
-        pred = self.predictor(fused_feat)
-        
-        return pred, attn_w
+        # 动态门控融合
+        concat_feats = torch.cat([feat_lstm, feat_trans], dim=-1)
+        gate_weights = self.gate(concat_feats)
+        gate_lstm, gate_trans = gate_weights.chunk(2, dim=-1)
+        fused = gate_lstm * feat_lstm + gate_trans * feat_trans
+
+        pred = self.predictor(fused)
+        meta = {"attn_w": attn_w, "gate_lstm": gate_lstm, "gate_trans": gate_trans}
+        return pred, meta

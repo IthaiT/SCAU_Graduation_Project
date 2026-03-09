@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 from loguru import logger
+from sklearn.metrics import mean_absolute_error, r2_score
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -63,11 +64,16 @@ def _build_model(name: str, input_dim: int) -> nn.Module:
 def compute_metrics(true: np.ndarray, pred: np.ndarray) -> dict[str, float]:
     mse = float(np.mean((true - pred) ** 2))
     rmse = float(np.sqrt(mse))
+    mae = float(mean_absolute_error(true, pred))
     mape = float(np.mean(np.abs((true - pred) / (np.abs(true) + 1e-8))) * 100)
+    r2 = float(r2_score(true, pred))
     true_diff = np.diff(true)
     pred_diff = np.diff(pred)
     da = float(np.mean(np.sign(true_diff) == np.sign(pred_diff)) * 100)
-    return {"MSE": round(mse, 4), "RMSE": round(rmse, 4), "MAPE": round(mape, 4), "DA": round(da, 2)}
+    return {
+        "MSE": round(mse, 4), "RMSE": round(rmse, 4), "MAE": round(mae, 4),
+        "MAPE": round(mape, 4), "R2": round(r2, 4), "DA": round(da, 2),
+    }
 
 
 @torch.no_grad()
@@ -91,7 +97,7 @@ def run_once(
     scaler_target,
     num_features: int,
 ) -> dict[str, dict[str, float]]:
-    """执行一次完整的 训练→评估，返回 {model_name: {MSE, RMSE, MAPE, DA}}。"""
+    """执行一次完整的 训练→评估，返回 {model_name: {MSE, RMSE, MAE, MAPE, R2, DA}}。"""
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
     models: dict[str, nn.Module] = {
@@ -140,13 +146,13 @@ def run_once(
 
 # ── 格式化输出 ────────────────────────────────────────────────────
 def _fmt_table_header() -> str:
-    hdr = f"{'Model':<20s} {'MSE':>10s} {'RMSE':>10s} {'MAPE%':>10s} {'DA%':>10s}"
-    sep = "-" * 60
+    hdr = f"{'Model':<20s} {'MSE':>10s} {'RMSE':>10s} {'MAE':>10s} {'R²':>10s} {'MAPE%':>10s} {'DA%':>10s}"
+    sep = "-" * 84
     return f"{sep}\n{hdr}\n{sep}"
 
 
 def _fmt_row(label: str, m: dict[str, float]) -> str:
-    return f"{label:<20s} {m['MSE']:>10.2f} {m['RMSE']:>10.2f} {m['MAPE']:>10.2f} {m['DA']:>10.2f}"
+    return f"{label:<20s} {m['MSE']:>10.2f} {m['RMSE']:>10.2f} {m['MAE']:>10.2f} {m['R2']:>10.4f} {m['MAPE']:>10.2f} {m['DA']:>10.2f}"
 
 
 # ── 主流程 ────────────────────────────────────────────────────────
@@ -188,17 +194,17 @@ def main() -> None:
             label = MODEL_LABELS[name]
             m = metrics[name]
             lines.append(_fmt_row(label, m))
-            logger.info("  {} → MSE={:.2f}  RMSE={:.2f}  MAPE={:.2f}%  DA={:.2f}%",
-                         label, m["MSE"], m["RMSE"], m["MAPE"], m["DA"])
-        lines.append("-" * 60)
+            logger.info("  {} → MSE={:.2f}  RMSE={:.2f}  MAE={:.2f}  R²={:.4f}  MAPE={:.2f}%  DA={:.2f}%",
+                         label, m["MSE"], m["RMSE"], m["MAE"], m["R2"], m["MAPE"], m["DA"])
+        lines.append("-" * 84)
         lines.append("")
 
     # ── 计算均值 & 标准差 ─────────────────────────────────────────
     lines.append("=" * 60)
     lines.append(f"  {NUM_RUNS} 轮平均 ± 标准差")
     lines.append("=" * 60)
-    lines.append(f"{'Model':<20s} {'MSE':>16s} {'RMSE':>16s} {'MAPE%':>16s} {'DA%':>16s}")
-    lines.append("-" * 84)
+    lines.append(f"{'Model':<20s} {'MSE':>16s} {'RMSE':>16s} {'MAE':>16s} {'R²':>16s} {'MAPE%':>16s} {'DA%':>16s}")
+    lines.append("-" * 120)
 
     logger.info("=" * 60)
     logger.info("  {} 轮统计汇总", NUM_RUNS)
@@ -206,7 +212,7 @@ def main() -> None:
 
     for name in MODEL_NAMES:
         label = MODEL_LABELS[name]
-        vals = {k: [run[name][k] for run in all_runs] for k in ["MSE", "RMSE", "MAPE", "DA"]}
+        vals = {k: [run[name][k] for run in all_runs] for k in ["MSE", "RMSE", "MAE", "MAPE", "R2", "DA"]}
         means = {k: np.mean(v) for k, v in vals.items()}
         stds = {k: np.std(v) for k, v in vals.items()}
 
@@ -214,15 +220,18 @@ def main() -> None:
             f"{label:<20s}"
             f" {means['MSE']:>7.2f}±{stds['MSE']:<7.2f}"
             f" {means['RMSE']:>7.2f}±{stds['RMSE']:<7.2f}"
+            f" {means['MAE']:>7.2f}±{stds['MAE']:<7.2f}"
+            f" {means['R2']:>7.4f}±{stds['R2']:<7.4f}"
             f" {means['MAPE']:>7.2f}±{stds['MAPE']:<7.2f}"
             f" {means['DA']:>7.2f}±{stds['DA']:<7.2f}"
         )
         lines.append(row)
-        logger.info("{:<20s} MSE={:.2f}±{:.2f}  RMSE={:.2f}±{:.2f}  MAPE={:.2f}%±{:.2f}  DA={:.2f}%±{:.2f}",
+        logger.info("{:<20s} MSE={:.2f}±{:.2f}  RMSE={:.2f}±{:.2f}  MAE={:.2f}±{:.2f}  R²={:.4f}±{:.4f}  MAPE={:.2f}%±{:.2f}  DA={:.2f}%±{:.2f}",
                      label, means["MSE"], stds["MSE"], means["RMSE"], stds["RMSE"],
+                     means["MAE"], stds["MAE"], means["R2"], stds["R2"],
                      means["MAPE"], stds["MAPE"], means["DA"], stds["DA"])
 
-    lines.append("=" * 84)
+    lines.append("=" * 120)
     lines.append(f"\nBenchmark 结束时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     # ── 写入文件 ──────────────────────────────────────────────────
