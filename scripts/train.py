@@ -1,9 +1,7 @@
-"""V5-beta 五模型对比训练: LSTM / Transformer / Serial LSTM-Trans / Parallel LSTM-Trans / LSTM-mTrans-MLP。
+"""V6 四模型对比训练: LSTM / Transformer / Serial LSTM-Trans / Parallel LSTM-Trans。
 
-基于论文 "LSTM–Transformer-Based Robust Hybrid Deep Learning Model
-for Financial Time Series Forecasting" (Sci 2025, 7, 7) 架构,
 适配 CSI 300 长周期数据:
-- 输入: 仅收盘价 (单特征, input_dim=1)
+- 输入: 17 维技术指标特征 (input_dim=17)
 - 序列长度: 60
 - Loss: MSE
 - Optimizer: Adam(lr=0.001)
@@ -28,7 +26,6 @@ from src.engine.trainer import train_model  # noqa: E402
 from src.models.networks import (  # noqa: E402
     LSTMModel,
     LSTMTransformerModel,
-    LSTMmTransMLPModel,
     ParallelLSTMTransformerModel,
     TransformerModel,
 )
@@ -36,16 +33,15 @@ from src.models.networks import (  # noqa: E402
 logger.remove()
 logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {name} | {level} | {message}")
 
-# ── 超参数 (五模型统一训练策略，仅保留架构差异) ──────────────────
+# ── 超参数 (四模型统一训练策略，仅保留架构差异) ──────────────
 SEQ_LEN = 60
 PRED_LEN = 1
 BATCH_SIZE = 32
 LR = 0.001
 
 # 模型架构参数
-LSTM_HIDDEN = 60      # LSTM / Transformer / LSTM-mTrans-MLP
-NUM_HEADS = 5         # Transformer / LSTM-mTrans-MLP
-HEAD_DIM = 120        # LSTM-mTrans-MLP 自定义 MHA
+LSTM_HIDDEN = 60      # LSTM / Transformer
+NUM_HEADS = 5         # Transformer
 HYBRID_HIDDEN = 64    # Serial / Parallel
 HYBRID_HEADS = 4      # Serial / Parallel
 
@@ -62,15 +58,14 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("设备: {}", device)
 
-    # ── 数据: 仅使用收盘价 (单特征) ──
-    csv_path = PROJECT_ROOT / "data" / "csi300_raw.csv"
+    # ── 数据: 17 维技术指标特征 ──
+    csv_path = PROJECT_ROOT / "data" / "csi300_features.csv"
     df = pd.read_csv(csv_path, index_col="date", parse_dates=True)
-    df_close = df[["close"]].copy()
-    columns = df_close.columns.tolist()
-    num_features = len(columns)  # = 1
+    columns = df.columns.tolist()
+    num_features = len(columns)  # = 17
 
     train_loader, val_loader, test_loader, scaler_target = get_dataloaders(
-        df_values=df_close.values,
+        df_values=df.values,
         columns=columns,
         seq_len=SEQ_LEN,
         pred_len=PRED_LEN,
@@ -80,7 +75,7 @@ def main() -> None:
         val_ratio=VAL_RATIO,
     )
 
-    # ── 五模型实例化 ──
+    # ── 四模型实例化 ──
     models: dict[str, nn.Module] = {
         "LSTM": LSTMModel(
             input_dim=num_features, hidden_dim=LSTM_HIDDEN,
@@ -102,12 +97,6 @@ def main() -> None:
             num_lstm_layers=2, num_heads=HYBRID_HEADS,
             num_transformer_layers=2, ffn_dim=256,
             pred_len=PRED_LEN, dropout=0.2,
-        ),
-        "LSTM_mTrans_MLP": LSTMmTransMLPModel(
-            input_dim=num_features, lstm_hidden=LSTM_HIDDEN,
-            num_lstm_layers=2, num_heads=NUM_HEADS,
-            head_dim=HEAD_DIM, ffn_mid=5, pred_len=PRED_LEN,
-            lstm_dropout=0.1, trans_dropout=0.15, mlp_dropout=0.1,
         ),
     }
 

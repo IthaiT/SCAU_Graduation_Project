@@ -1,7 +1,7 @@
 """V5-beta 学术级评估流水线: 加载权重 → 推理 → 指标计算 → 论文级图表。
 
 生成图表:
-    1. 五模型预测值与真实值拟合曲线
+    1. 四模型预测值与真实值拟合曲线
     2. 训练/验证 Loss 下降曲线
     3. Attention 热力图 (LSTM-mTrans-MLP 的 mTransformer 注意力)
     4. 预测误差分布直方图
@@ -31,7 +31,6 @@ from src.data.dataset import get_dataloaders  # noqa: E402
 from src.models.networks import (  # noqa: E402
     LSTMModel,
     LSTMTransformerModel,
-    LSTMmTransMLPModel,
     ParallelLSTMTransformerModel,
     TransformerModel,
 )
@@ -55,14 +54,12 @@ _COLORS: dict[str, str] = {
     "Transformer": "#DD8452",
     "LSTM_Transformer": "#C44E52",
     "Parallel_LSTM_Transformer": "#8172B3",
-    "LSTM_mTrans_MLP": "#55A868",
 }
 _LABELS: dict[str, str] = {
     "LSTM": "LSTM",
     "Transformer": "Transformer",
     "LSTM_Transformer": "Serial LSTM-Trans",
     "Parallel_LSTM_Transformer": "Parallel LSTM-Trans",
-    "LSTM_mTrans_MLP": "LSTM-mTrans-MLP",
 }
 
 # ── 超参数 (与 train.py 一致) ─────────────────────────────────────
@@ -71,7 +68,6 @@ PRED_LEN = 1
 BATCH_SIZE = 32
 LSTM_HIDDEN = 60
 NUM_HEADS = 5
-HEAD_DIM = 120
 HYBRID_HIDDEN = 64
 HYBRID_HEADS = 4
 TRAIN_RATIO = 0.72
@@ -79,7 +75,7 @@ VAL_RATIO = 0.10
 
 MODELS_DIR = PROJECT_ROOT / "models"
 RESULTS_DIR = PROJECT_ROOT / "results"
-MODEL_NAMES = ["LSTM", "Transformer", "LSTM_Transformer", "Parallel_LSTM_Transformer", "LSTM_mTrans_MLP"]
+MODEL_NAMES = ["LSTM", "Transformer", "LSTM_Transformer", "Parallel_LSTM_Transformer"]
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────
@@ -115,12 +111,7 @@ def _build_model(name: str, input_dim: int) -> nn.Module:
             num_transformer_layers=2, ffn_dim=256,
             pred_len=PRED_LEN, dropout=0.2,
         )
-    return LSTMmTransMLPModel(
-        input_dim=input_dim, lstm_hidden=LSTM_HIDDEN,
-        num_lstm_layers=2, num_heads=NUM_HEADS,
-        head_dim=HEAD_DIM, ffn_mid=5, pred_len=PRED_LEN,
-        lstm_dropout=0.1, trans_dropout=0.15, mlp_dropout=0.1,
-    )
+    raise ValueError(f"Unknown model: {name}")
 
 
 @torch.no_grad()
@@ -201,7 +192,7 @@ def plot_loss_curves(
         ax.set_title(title)
         ax.legend(frameon=True, fancybox=True, fontsize=9)
         ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, 3))
-    fig.suptitle("五模型训练过程损失对比", fontsize=14, fontweight="bold", y=1.02)
+    fig.suptitle("四模型训练过程损失对比", fontsize=14, fontweight="bold", y=1.02)
     _save(fig, save_path)
 
 
@@ -213,7 +204,7 @@ def plot_attention_heatmap(attn: NDArray, save_path: Path) -> None:
                 cbar_kws={"shrink": 0.82, "label": "权重"})
     ax.set_xlabel("Key 时间步")
     ax.set_ylabel("Query 时间步")
-    ax.set_title("LSTM-mTrans-MLP 自注意力权重 (mTransformer)", fontsize=13, fontweight="bold")
+    ax.set_title("Serial LSTM-Trans Cross-Attention 权重", fontsize=13, fontweight="bold")
     _save(fig, save_path)
 
 
@@ -231,7 +222,7 @@ def plot_error_distribution(
     ax.axvline(x=0, color="black", linestyle="--", linewidth=1.0, alpha=0.6)
     ax.set_xlabel("预测误差 (预测值 − 真实值)")
     ax.set_ylabel("频数")
-    ax.set_title("五模型预测误差分布", fontsize=14, fontweight="bold")
+    ax.set_title("四模型预测误差分布", fontsize=14, fontweight="bold")
     ax.legend(frameon=True, fancybox=True, fontsize=9)
     ax.grid(alpha=0.3)
     _save(fig, save_path)
@@ -242,15 +233,14 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("评估设备: {}", device)
 
-    # 数据: 仅收盘价 (单特征)
-    csv_path = PROJECT_ROOT / "data" / "csi300_raw.csv"
+    # 数据: 17 维技术指标特征
+    csv_path = PROJECT_ROOT / "data" / "csi300_features.csv"
     df = pd.read_csv(csv_path, index_col="date", parse_dates=True)
-    df_close = df[["close"]].copy()
-    columns = df_close.columns.tolist()
-    num_features = len(columns)  # = 1
+    columns = df.columns.tolist()
+    num_features = len(columns)  # = 17
 
     _, _, test_loader, scaler_target = get_dataloaders(
-        df_values=df_close.values, columns=columns,
+        df_values=df.values, columns=columns,
         seq_len=SEQ_LEN, pred_len=PRED_LEN, batch_size=BATCH_SIZE,
         target_col="close", train_ratio=TRAIN_RATIO, val_ratio=VAL_RATIO,
     )
@@ -294,8 +284,8 @@ def main() -> None:
         logger.info("{} → MSE={:.2f} RMSE={:.2f} MAE={:.2f} R²={:.4f} MAPE={:.2f}% DA={:.2f}%",
                      name, m["MSE"], m["RMSE"], m["MAE"], m["R2"], m["MAPE"], m["DA"])
 
-        # 取 LSTM_mTrans_MLP 的注意力热力图
-        if name == "LSTM_mTrans_MLP" and attn_w is not None:
+        # 取 Serial LSTM-Trans 的注意力热力图
+        if name == "LSTM_Transformer" and attn_w is not None:
             attn_for_heatmap = attn_w
 
     assert true_real is not None

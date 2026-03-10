@@ -113,58 +113,78 @@ class TransformerModel(nn.Module):
         return self.fc(x[:, -1, :]), attn_w
 
 
-# ── Baseline 3: 串行 LSTM-Transformer (V1-V4 自研版) ─────────────
+# ── Baseline 3: 串行 LSTM-Trans (V10 自研版) ────────────────────
 class LSTMTransformerModel(nn.Module):
-    """串行 LSTM-Transformer: LSTM → LayerNorm → PE → Transformer → Concat → Gated Fusion。
+    """串行 LSTM-Trans V10: LSTM 骨干 + 单层 Pre-Norm 注意力 + ReZero。
 
-    V1-V4 迭代自研版本:
-        V2: 加入 LayerNorm 消除方差偏移
-        V3: 跳跃连接 (Concat LSTM_last + Trans_last)
-        V4: 门控融合瓶颈网络 (Linear→ReLU→Dropout→Linear)
+    借鉴 LSTM-mTrans-MLP 的极简设计哲学:
+        - LSTM 作为主干网络，承担绝大部分建模
+        - 仅用单层 Pre-Norm 自注意力做轻量级精炼
+        - ReZero (α=0 初始化) 确保训练初期 = 纯 LSTM
+        - 注意力只能渐进增益，永远不会破坏 LSTM 特征
     """
 
     def __init__(self, input_dim: int = 1, hidden_dim: int = 64,
                  num_lstm_layers: int = 2, num_heads: int = 4,
                  num_transformer_layers: int = 2, ffn_dim: int = 256,
-                 pred_len: int = 1, dropout: float = 0.2) -> None:
+                 pred_len: int = 1, dropout: float = 0.2,
+                 seq_len: int = 60) -> None:
         super().__init__()
+
+        # LSTM 骨干 (与 LSTM baseline 同级)
         self.lstm = nn.LSTM(
             input_dim, hidden_dim, num_layers=num_lstm_layers,
             batch_first=True, dropout=dropout if num_lstm_layers > 1 else 0.0,
         )
-        self.ln = nn.LayerNorm(hidden_dim)
-        self.pe = PositionalEncoding(hidden_dim, dropout=dropout)
-        self.encoder_layers = nn.ModuleList([
-            _EncoderLayer(hidden_dim, num_heads, ffn_dim, dropout)
-            for _ in range(num_transformer_layers)
-        ])
-        self.fusion = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
+
+        # 单层 Pre-Norm 自注意力精炼 (仅 1 层，借鉴 mTrans 设计)
+        self.norm1 = nn.LayerNorm(hidden_dim)
+        self.attn = nn.MultiheadAttention(
+            hidden_dim, num_heads, dropout=dropout, batch_first=True,
+        )
+        self.drop1 = nn.Dropout(dropout)
+
+        self.norm2 = nn.LayerNorm(hidden_dim)
+        self.ffn = nn.Sequential(
+            nn.Linear(hidden_dim, ffn_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim, pred_len),
+            nn.Linear(ffn_dim, hidden_dim),
         )
 
+        # ReZero: α 初始化为 0 → 模型初始 = 纯 LSTM
+        self.alpha = nn.Parameter(torch.zeros(1))
+
+        self.fc = nn.Linear(hidden_dim, pred_len)
+
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        x, _ = self.lstm(x)
-        x = self.ln(x)
-        lstm_last = x[:, -1, :]  # (B, H)
-        x = self.pe(x)
-        attn_w = torch.empty(0)
-        for layer in self.encoder_layers:
-            x, attn_w = layer(x)
-        trans_last = x[:, -1, :]  # (B, H)
-        fused = torch.cat([lstm_last, trans_last], dim=-1)  # (B, 2H)
-        return self.fusion(fused), attn_w
+        # LSTM 骨干
+        lstm_out, _ = self.lstm(x)  # (B, S, H)
+
+        # 单层 Pre-Norm 注意力精炼 + ReZero
+        normed = self.norm1(lstm_out)
+        attn_out, attn_w = self.attn(
+            normed, normed, normed,
+            need_weights=True, average_attn_weights=True,
+        )
+        x = lstm_out + self.alpha * self.drop1(attn_out)
+
+        normed = self.norm2(x)
+        x = x + self.alpha * self.ffn(normed)
+
+        return self.fc(x[:, -1, :]), attn_w
 
 
-# ── Baseline 4: 并行双塔 LSTM-Transformer (V5 自研版) ────────────
+# ── Baseline 4: 并行双塔 LSTM-Transformer (V12 自研版) ───────────
 class ParallelLSTMTransformerModel(nn.Module):
-    """并行双塔 + 动态门控: 两塔并行处理原始输入 → Sigmoid 门控融合 → MLP 预测。
+    """并行双路读出 V12: 共享 LSTM 骨干 + 局部/全局双路 + 门控。
 
-    左塔 (LSTM): 捕获局部时序动量
-    右塔 (Transformer): 捕获全局注意力依赖
-    融合: Sigmoid gating 实现逐维度动态加权
+    核心思想:
+        - 共享 LSTM 骨干处理原始输入 (避免弱右塔问题)
+        - 路径 A: 直接取 last step (局部/近期特征)
+        - 路径 B: 可学习 query 对 LSTM 隐状态做 cross-attention 池化 (全局/历史)
+        - 约束门控逐维度决定信赖哪个视角
+        - 极其轻量 (~78K 参数, 1.6x LSTM), 稳定可训练
     """
 
     def __init__(self, input_dim: int = 1, hidden_dim: int = 64,
@@ -172,57 +192,51 @@ class ParallelLSTMTransformerModel(nn.Module):
                  num_transformer_layers: int = 2, ffn_dim: int = 256,
                  pred_len: int = 1, dropout: float = 0.2) -> None:
         super().__init__()
-        # Left tower: LSTM
+
+        # 共享 LSTM 骨干
         self.lstm = nn.LSTM(
             input_dim, hidden_dim, num_layers=num_lstm_layers,
             batch_first=True, dropout=dropout if num_lstm_layers > 1 else 0.0,
         )
         self.ln_lstm = nn.LayerNorm(hidden_dim)
 
-        # Right tower: Transformer
-        self.proj = nn.Linear(input_dim, hidden_dim)
-        self.pe = PositionalEncoding(hidden_dim, dropout=dropout)
-        self.encoder_layers = nn.ModuleList([
-            _EncoderLayer(hidden_dim, num_heads, ffn_dim, dropout)
-            for _ in range(num_transformer_layers)
-        ])
-        self.ln_trans = nn.LayerNorm(hidden_dim)
-
-        # Dynamic Gating Mechanism
-        self.gate = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim * 2),
-            nn.Sigmoid(),
+        # 路径 B: Cross-Attention 池化 (全局/历史读出)
+        self.query = nn.Parameter(torch.randn(1, 1, hidden_dim) * 0.02)
+        self.cross_attn = nn.MultiheadAttention(
+            hidden_dim, num_heads, dropout=dropout, batch_first=True,
         )
+        self.ln_pool = nn.LayerNorm(hidden_dim)
 
-        # Prediction head
-        self.predictor = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim // 2, pred_len),
-        )
+        # 约束门控 + 融合
+        self.gate_proj = nn.Linear(hidden_dim * 2, hidden_dim)
+        self.ln_fused = nn.LayerNorm(hidden_dim)
+
+        self.fc = nn.Linear(hidden_dim, pred_len)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        # Left tower: LSTM
-        out_lstm, _ = self.lstm(x)
-        feat_lstm = self.ln_lstm(out_lstm[:, -1, :])
+        # 共享 LSTM 骨干
+        lstm_out, _ = self.lstm(x)                          # (B, S, H)
+        lstm_out = self.ln_lstm(lstm_out)
 
-        # Right tower: Transformer (with GAP)
-        out_trans = self.pe(self.proj(x))
-        attn_w = torch.empty(0)
-        for layer in self.encoder_layers:
-            out_trans, attn_w = layer(out_trans)
-        feat_trans = self.ln_trans(out_trans.mean(dim=1))
+        # 路径 A: 直接取 last step (局部/近期)
+        feat_local = lstm_out[:, -1, :]                      # (B, H)
 
-        # Dynamic Gating
-        concat_feats = torch.cat([feat_lstm, feat_trans], dim=-1)
-        gate_weights = self.gate(concat_feats)
-        gate_lstm, gate_trans = gate_weights.chunk(2, dim=-1)
-        fused_feat = gate_lstm * feat_lstm + gate_trans * feat_trans
+        # 路径 B: cross-attention 池化 (全局/历史)
+        query = self.query.expand(x.size(0), -1, -1)        # (B, 1, H)
+        pooled, attn_w = self.cross_attn(
+            query, lstm_out, lstm_out,
+            need_weights=True, average_attn_weights=True,
+        )
+        feat_global = self.ln_pool(pooled.squeeze(1))        # (B, H)
 
-        # Prediction
-        pred = self.predictor(fused_feat)
-        return pred, attn_w
+        # 约束门控融合
+        gate = torch.sigmoid(self.gate_proj(
+            torch.cat([feat_local, feat_global], dim=-1),
+        ))
+        fused = gate * feat_global + (1 - gate) * feat_local  # (B, H)
+        fused = self.ln_fused(fused)
+
+        return self.fc(fused), attn_w
 
 
 # ══════════════════════════════════════════════════════════════════
