@@ -1,4 +1,4 @@
-"""V5-beta 三模型对比训练: LSTM / Transformer / LSTM-mTrans-MLP。
+"""V5-beta 五模型对比训练: LSTM / Transformer / Serial LSTM-Trans / Parallel LSTM-Trans / LSTM-mTrans-MLP。
 
 基于论文 "LSTM–Transformer-Based Robust Hybrid Deep Learning Model
 for Financial Time Series Forecasting" (Sci 2025, 7, 7) 架构,
@@ -27,23 +27,29 @@ from src.data.dataset import get_dataloaders  # noqa: E402
 from src.engine.trainer import train_model  # noqa: E402
 from src.models.networks import (  # noqa: E402
     LSTMModel,
+    LSTMTransformerModel,
     LSTMmTransMLPModel,
+    ParallelLSTMTransformerModel,
     TransformerModel,
 )
 
 logger.remove()
 logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {name} | {level} | {message}")
 
-# ── 超参数 ────────────────────────────────────────────────────────
+# ── 超参数 (五模型统一训练策略，仅保留架构差异) ──────────────────
 SEQ_LEN = 60
 PRED_LEN = 1
 BATCH_SIZE = 32
 LR = 0.001
-LSTM_HIDDEN = 60
-NUM_HEADS = 5
-HEAD_DIM = 120
 
-# 统一训练配置: 所有模型使用相同 epochs 和 patience，确保公平对比
+# 模型架构参数
+LSTM_HIDDEN = 60      # LSTM / Transformer / LSTM-mTrans-MLP
+NUM_HEADS = 5         # Transformer / LSTM-mTrans-MLP
+HEAD_DIM = 120        # LSTM-mTrans-MLP 自定义 MHA
+HYBRID_HIDDEN = 64    # Serial / Parallel
+HYBRID_HEADS = 4      # Serial / Parallel
+
+# 统一训练配置 (公平对比)
 EPOCHS = 100
 PATIENCE = 20
 
@@ -74,7 +80,7 @@ def main() -> None:
         val_ratio=VAL_RATIO,
     )
 
-    # ── 三模型实例化 ──
+    # ── 五模型实例化 ──
     models: dict[str, nn.Module] = {
         "LSTM": LSTMModel(
             input_dim=num_features, hidden_dim=LSTM_HIDDEN,
@@ -84,6 +90,18 @@ def main() -> None:
             input_dim=num_features, d_model=LSTM_HIDDEN,
             num_heads=NUM_HEADS, num_layers=2,
             ffn_dim=128, pred_len=PRED_LEN, dropout=0.15,
+        ),
+        "LSTM_Transformer": LSTMTransformerModel(
+            input_dim=num_features, hidden_dim=HYBRID_HIDDEN,
+            num_lstm_layers=2, num_heads=HYBRID_HEADS,
+            num_transformer_layers=2, ffn_dim=256,
+            pred_len=PRED_LEN, dropout=0.2,
+        ),
+        "Parallel_LSTM_Transformer": ParallelLSTMTransformerModel(
+            input_dim=num_features, hidden_dim=HYBRID_HIDDEN,
+            num_lstm_layers=2, num_heads=HYBRID_HEADS,
+            num_transformer_layers=2, ffn_dim=256,
+            pred_len=PRED_LEN, dropout=0.2,
         ),
         "LSTM_mTrans_MLP": LSTMmTransMLPModel(
             input_dim=num_features, lstm_hidden=LSTM_HIDDEN,
@@ -100,6 +118,7 @@ def main() -> None:
         logger.info("=" * 40)
         logger.info("开始训练: {} ({:,} params)", model_name, sum(p.numel() for p in model.parameters()))
 
+        # 统一训练策略: MSELoss + Adam(lr=1e-3) + 无调度器
         criterion = nn.MSELoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 

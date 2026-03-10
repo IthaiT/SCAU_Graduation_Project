@@ -1,7 +1,7 @@
-"""V5-beta 学术级评估流水线: 加载权重 → 推理 → 指标计算 → 四张论文级图表。
+"""V5-beta 学术级评估流水线: 加载权重 → 推理 → 指标计算 → 论文级图表。
 
 生成图表:
-    1. 三模型预测值与真实值拟合曲线
+    1. 五模型预测值与真实值拟合曲线
     2. 训练/验证 Loss 下降曲线
     3. Attention 热力图 (LSTM-mTrans-MLP 的 mTransformer 注意力)
     4. 预测误差分布直方图
@@ -30,7 +30,9 @@ from loguru import logger  # noqa: E402
 from src.data.dataset import get_dataloaders  # noqa: E402
 from src.models.networks import (  # noqa: E402
     LSTMModel,
+    LSTMTransformerModel,
     LSTMmTransMLPModel,
+    ParallelLSTMTransformerModel,
     TransformerModel,
 )
 
@@ -51,11 +53,15 @@ sns.set_theme(style="whitegrid", font="Microsoft YaHei", palette="muted")
 _COLORS: dict[str, str] = {
     "LSTM": "#4C72B0",
     "Transformer": "#DD8452",
+    "LSTM_Transformer": "#C44E52",
+    "Parallel_LSTM_Transformer": "#8172B3",
     "LSTM_mTrans_MLP": "#55A868",
 }
 _LABELS: dict[str, str] = {
     "LSTM": "LSTM",
     "Transformer": "Transformer",
+    "LSTM_Transformer": "Serial LSTM-Trans",
+    "Parallel_LSTM_Transformer": "Parallel LSTM-Trans",
     "LSTM_mTrans_MLP": "LSTM-mTrans-MLP",
 }
 
@@ -66,12 +72,14 @@ BATCH_SIZE = 32
 LSTM_HIDDEN = 60
 NUM_HEADS = 5
 HEAD_DIM = 120
+HYBRID_HIDDEN = 64
+HYBRID_HEADS = 4
 TRAIN_RATIO = 0.72
 VAL_RATIO = 0.10
 
 MODELS_DIR = PROJECT_ROOT / "models"
 RESULTS_DIR = PROJECT_ROOT / "results"
-MODEL_NAMES = ["LSTM", "Transformer", "LSTM_mTrans_MLP"]
+MODEL_NAMES = ["LSTM", "Transformer", "LSTM_Transformer", "Parallel_LSTM_Transformer", "LSTM_mTrans_MLP"]
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────
@@ -92,6 +100,20 @@ def _build_model(name: str, input_dim: int) -> nn.Module:
             input_dim=input_dim, d_model=LSTM_HIDDEN,
             num_heads=NUM_HEADS, num_layers=2,
             ffn_dim=128, pred_len=PRED_LEN, dropout=0.15,
+        )
+    if name == "LSTM_Transformer":
+        return LSTMTransformerModel(
+            input_dim=input_dim, hidden_dim=HYBRID_HIDDEN,
+            num_lstm_layers=2, num_heads=HYBRID_HEADS,
+            num_transformer_layers=2, ffn_dim=256,
+            pred_len=PRED_LEN, dropout=0.2,
+        )
+    if name == "Parallel_LSTM_Transformer":
+        return ParallelLSTMTransformerModel(
+            input_dim=input_dim, hidden_dim=HYBRID_HIDDEN,
+            num_lstm_layers=2, num_heads=HYBRID_HEADS,
+            num_transformer_layers=2, ffn_dim=256,
+            pred_len=PRED_LEN, dropout=0.2,
         )
     return LSTMmTransMLPModel(
         input_dim=input_dim, lstm_hidden=LSTM_HIDDEN,
@@ -149,15 +171,15 @@ def plot_predictions(
     x = np.arange(len(tail))
     fig, ax = plt.subplots(figsize=(13, 5), constrained_layout=True)
     ax.plot(x, tail, color="black", linewidth=2.0, label="真实值", zorder=5)
-    styles = ["-", "--", "-."]
+    styles = ["-", "--", "-.", ":", (0, (3, 1, 1, 1))]
     for i, (name, pred) in enumerate(preds_dict.items()):
-        ax.plot(x, pred[-last_n:], linestyle=styles[i % 3],
+        ax.plot(x, pred[-last_n:], linestyle=styles[i % len(styles)],
                 color=_COLORS.get(name), linewidth=1.4,
                 label=_LABELS.get(name, name), alpha=0.85)
     ax.set_xlabel("时间步 (最后 {} 天)".format(last_n))
     ax.set_ylabel("沪深300指数点位")
     ax.set_title("测试集预测值与真实值对比", fontsize=14, fontweight="bold")
-    ax.legend(frameon=True, fancybox=True, fontsize=9, loc="upper left")
+    ax.legend(frameon=True, fancybox=True, fontsize=8, loc="upper left")
     ax.grid(alpha=0.3)
     _save(fig, save_path)
 
@@ -179,7 +201,7 @@ def plot_loss_curves(
         ax.set_title(title)
         ax.legend(frameon=True, fancybox=True, fontsize=9)
         ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, 3))
-    fig.suptitle("三模型训练过程损失对比", fontsize=14, fontweight="bold", y=1.02)
+    fig.suptitle("五模型训练过程损失对比", fontsize=14, fontweight="bold", y=1.02)
     _save(fig, save_path)
 
 
@@ -209,7 +231,7 @@ def plot_error_distribution(
     ax.axvline(x=0, color="black", linestyle="--", linewidth=1.0, alpha=0.6)
     ax.set_xlabel("预测误差 (预测值 − 真实值)")
     ax.set_ylabel("频数")
-    ax.set_title("三模型预测误差分布", fontsize=14, fontweight="bold")
+    ax.set_title("五模型预测误差分布", fontsize=14, fontweight="bold")
     ax.legend(frameon=True, fancybox=True, fontsize=9)
     ax.grid(alpha=0.3)
     _save(fig, save_path)

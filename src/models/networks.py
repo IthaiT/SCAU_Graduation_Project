@@ -1,7 +1,10 @@
-"""V5-beta: LSTM / Transformer / LSTM-mTrans-MLP 三套时序预测网络。
+"""V5-beta: 五套时序预测网络。
 
-严格按照论文 "LSTM–Transformer-Based Robust Hybrid Deep Learning Model
-for Financial Time Series Forecasting" (Sci 2025, 7, 7) 实现。
+Baseline 1: LSTM — 纯 LSTM 基线
+Baseline 2: Transformer — 纯 Transformer 基线
+Baseline 3: Serial LSTM-Transformer — 串行 LSTM→Transformer (V1-V4 自研迭代)
+Baseline 4: Parallel LSTM-Transformer — 并行双塔 + 动态门控 (V5 自研)
+核心模型: LSTM-mTrans-MLP — 论文 Kabir et al. (Sci 2025, 7, 7) 架构
 
 所有模型统一签名:
     forward(x: Tensor) -> tuple[Tensor, Tensor | None]
@@ -108,6 +111,118 @@ class TransformerModel(nn.Module):
         for layer in self.layers:
             x, attn_w = layer(x)
         return self.fc(x[:, -1, :]), attn_w
+
+
+# ── Baseline 3: 串行 LSTM-Transformer (V1-V4 自研版) ─────────────
+class LSTMTransformerModel(nn.Module):
+    """串行 LSTM-Transformer: LSTM → LayerNorm → PE → Transformer → Concat → Gated Fusion。
+
+    V1-V4 迭代自研版本:
+        V2: 加入 LayerNorm 消除方差偏移
+        V3: 跳跃连接 (Concat LSTM_last + Trans_last)
+        V4: 门控融合瓶颈网络 (Linear→ReLU→Dropout→Linear)
+    """
+
+    def __init__(self, input_dim: int = 1, hidden_dim: int = 64,
+                 num_lstm_layers: int = 2, num_heads: int = 4,
+                 num_transformer_layers: int = 2, ffn_dim: int = 256,
+                 pred_len: int = 1, dropout: float = 0.2) -> None:
+        super().__init__()
+        self.lstm = nn.LSTM(
+            input_dim, hidden_dim, num_layers=num_lstm_layers,
+            batch_first=True, dropout=dropout if num_lstm_layers > 1 else 0.0,
+        )
+        self.ln = nn.LayerNorm(hidden_dim)
+        self.pe = PositionalEncoding(hidden_dim, dropout=dropout)
+        self.encoder_layers = nn.ModuleList([
+            _EncoderLayer(hidden_dim, num_heads, ffn_dim, dropout)
+            for _ in range(num_transformer_layers)
+        ])
+        self.fusion = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, pred_len),
+        )
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        x, _ = self.lstm(x)
+        x = self.ln(x)
+        lstm_last = x[:, -1, :]  # (B, H)
+        x = self.pe(x)
+        attn_w = torch.empty(0)
+        for layer in self.encoder_layers:
+            x, attn_w = layer(x)
+        trans_last = x[:, -1, :]  # (B, H)
+        fused = torch.cat([lstm_last, trans_last], dim=-1)  # (B, 2H)
+        return self.fusion(fused), attn_w
+
+
+# ── Baseline 4: 并行双塔 LSTM-Transformer (V5 自研版) ────────────
+class ParallelLSTMTransformerModel(nn.Module):
+    """并行双塔 + 动态门控: 两塔并行处理原始输入 → Sigmoid 门控融合 → MLP 预测。
+
+    左塔 (LSTM): 捕获局部时序动量
+    右塔 (Transformer): 捕获全局注意力依赖
+    融合: Sigmoid gating 实现逐维度动态加权
+    """
+
+    def __init__(self, input_dim: int = 1, hidden_dim: int = 64,
+                 num_lstm_layers: int = 2, num_heads: int = 4,
+                 num_transformer_layers: int = 2, ffn_dim: int = 256,
+                 pred_len: int = 1, dropout: float = 0.2) -> None:
+        super().__init__()
+        # Left tower: LSTM
+        self.lstm = nn.LSTM(
+            input_dim, hidden_dim, num_layers=num_lstm_layers,
+            batch_first=True, dropout=dropout if num_lstm_layers > 1 else 0.0,
+        )
+        self.ln_lstm = nn.LayerNorm(hidden_dim)
+
+        # Right tower: Transformer
+        self.proj = nn.Linear(input_dim, hidden_dim)
+        self.pe = PositionalEncoding(hidden_dim, dropout=dropout)
+        self.encoder_layers = nn.ModuleList([
+            _EncoderLayer(hidden_dim, num_heads, ffn_dim, dropout)
+            for _ in range(num_transformer_layers)
+        ])
+        self.ln_trans = nn.LayerNorm(hidden_dim)
+
+        # Dynamic Gating Mechanism
+        self.gate = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim * 2),
+            nn.Sigmoid(),
+        )
+
+        # Prediction head
+        self.predictor = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim // 2, pred_len),
+        )
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        # Left tower: LSTM
+        out_lstm, _ = self.lstm(x)
+        feat_lstm = self.ln_lstm(out_lstm[:, -1, :])
+
+        # Right tower: Transformer (with GAP)
+        out_trans = self.pe(self.proj(x))
+        attn_w = torch.empty(0)
+        for layer in self.encoder_layers:
+            out_trans, attn_w = layer(out_trans)
+        feat_trans = self.ln_trans(out_trans.mean(dim=1))
+
+        # Dynamic Gating
+        concat_feats = torch.cat([feat_lstm, feat_trans], dim=-1)
+        gate_weights = self.gate(concat_feats)
+        gate_lstm, gate_trans = gate_weights.chunk(2, dim=-1)
+        fused_feat = gate_lstm * feat_lstm + gate_trans * feat_trans
+
+        # Prediction
+        pred = self.predictor(fused_feat)
+        return pred, attn_w
 
 
 # ══════════════════════════════════════════════════════════════════

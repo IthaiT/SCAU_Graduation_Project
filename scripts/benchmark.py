@@ -1,6 +1,7 @@
 """V5-beta 多轮训练+评估基准测试: 重复 N 次训练-评估流程，统计均值±标准差。
 
-严格按论文参数: 仅收盘价, seq_len=60, batch_size=1, MSE loss, Adam(lr=0.001)。
+五模型对比: LSTM / Transformer / Serial LSTM-Trans / Parallel LSTM-Trans / LSTM-mTrans-MLP。
+统一训练策略: 仅收盘价, seq_len=60, MSELoss, Adam(lr=0.001), epochs=100, patience=20。
 """
 from __future__ import annotations
 
@@ -24,7 +25,9 @@ from src.data.dataset import get_dataloaders  # noqa: E402
 from src.engine.trainer import train_model  # noqa: E402
 from src.models.networks import (  # noqa: E402
     LSTMModel,
+    LSTMTransformerModel,
     LSTMmTransMLPModel,
+    ParallelLSTMTransformerModel,
     TransformerModel,
 )
 
@@ -41,16 +44,22 @@ BATCH_SIZE = 32
 LSTM_HIDDEN = 60
 NUM_HEADS = 5
 HEAD_DIM = 120
-EPOCHS = 30
-PATIENCE = 10
-MTRANS_EPOCHS = 100
-MTRANS_PATIENCE = 20
+HYBRID_HIDDEN = 64
+HYBRID_HEADS = 4
+EPOCHS = 100
+PATIENCE = 20
 LR = 0.001
 TRAIN_RATIO = 0.72
 VAL_RATIO = 0.10
 
-MODEL_NAMES = ["LSTM", "Transformer", "LSTM_mTrans_MLP"]
-MODEL_LABELS = {"LSTM": "LSTM", "Transformer": "Transformer", "LSTM_mTrans_MLP": "LSTM-mTrans-MLP"}
+MODEL_NAMES = ["LSTM", "Transformer", "LSTM_Transformer", "Parallel_LSTM_Transformer", "LSTM_mTrans_MLP"]
+MODEL_LABELS = {
+    "LSTM": "LSTM",
+    "Transformer": "Transformer",
+    "LSTM_Transformer": "Serial LSTM-Trans",
+    "Parallel_LSTM_Transformer": "Parallel LSTM-Trans",
+    "LSTM_mTrans_MLP": "LSTM-mTrans-MLP",
+}
 MODELS_DIR = PROJECT_ROOT / "models"
 RESULTS_DIR = PROJECT_ROOT / "results"
 OUTPUT_FILE = RESULTS_DIR / "benchmark_results.txt"
@@ -68,6 +77,20 @@ def _build_model(name: str, input_dim: int) -> nn.Module:
             input_dim=input_dim, d_model=LSTM_HIDDEN,
             num_heads=NUM_HEADS, num_layers=2,
             ffn_dim=128, pred_len=PRED_LEN, dropout=0.15,
+        )
+    if name == "LSTM_Transformer":
+        return LSTMTransformerModel(
+            input_dim=input_dim, hidden_dim=HYBRID_HIDDEN,
+            num_lstm_layers=2, num_heads=HYBRID_HEADS,
+            num_transformer_layers=2, ffn_dim=256,
+            pred_len=PRED_LEN, dropout=0.2,
+        )
+    if name == "Parallel_LSTM_Transformer":
+        return ParallelLSTMTransformerModel(
+            input_dim=input_dim, hidden_dim=HYBRID_HIDDEN,
+            num_lstm_layers=2, num_heads=HYBRID_HEADS,
+            num_transformer_layers=2, ffn_dim=256,
+            pred_len=PRED_LEN, dropout=0.2,
         )
     return LSTMmTransMLPModel(
         input_dim=input_dim, lstm_hidden=LSTM_HIDDEN,
@@ -116,7 +139,7 @@ def run_once(
     """执行一次完整的 训练→评估，返回 {model_name: {MSE, RMSE, MAE, MAPE, R2, DA}}。"""
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 训练
+    # 训练 (统一策略: MSELoss + Adam(lr=1e-3) + 无调度器)
     for model_name in MODEL_NAMES:
         model = _build_model(model_name, num_features)
         logger.info("训练: {} ({:,} params)", model_name, sum(p.numel() for p in model.parameters()))
@@ -124,13 +147,10 @@ def run_once(
         criterion = nn.MSELoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
-        ep = MTRANS_EPOCHS if model_name == "LSTM_mTrans_MLP" else EPOCHS
-        pat = MTRANS_PATIENCE if model_name == "LSTM_mTrans_MLP" else PATIENCE
-
         train_model(
             model=model, train_loader=train_loader, val_loader=val_loader,
             criterion=criterion, optimizer=optimizer, device=device,
-            epochs=ep, patience=pat,
+            epochs=EPOCHS, patience=PATIENCE,
             save_path=MODELS_DIR / f"{model_name}_best.pth",
             scheduler=None,
             max_grad_norm=1.0,

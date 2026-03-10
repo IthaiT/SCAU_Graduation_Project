@@ -1,4 +1,4 @@
-"""V5-beta: 验证三套模型的输出张量形状 (LSTM / Transformer / LSTM-mTrans-MLP)。"""
+"""验证五套模型的输出张量形状 (LSTM / Transformer / Serial LSTM-Trans / Parallel LSTM-Trans / LSTM-mTrans-MLP)。"""
 import sys
 from pathlib import Path
 
@@ -9,7 +9,13 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import torch  # noqa: E402
 
-from src.models import LSTMModel, LSTMmTransMLPModel, TransformerModel  # noqa: E402
+from src.models import (  # noqa: E402
+    LSTMModel,
+    LSTMTransformerModel,
+    LSTMmTransMLPModel,
+    ParallelLSTMTransformerModel,
+    TransformerModel,
+)
 
 logger.remove()
 logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {name} | {level} | {message}")
@@ -17,6 +23,8 @@ logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {name} | {level} | {
 # 论文参数: 仅收盘价 (input_dim=1), seq_len=60
 BATCH, SEQ_LEN, FEATURES = 64, 60, 1
 LSTM_HIDDEN, NUM_HEADS, HEAD_DIM, PRED_LEN = 60, 5, 120, 1
+# Serial/Parallel 原始设计参数
+HYBRID_HIDDEN, HYBRID_HEADS = 64, 4
 
 
 def main() -> None:
@@ -32,6 +40,18 @@ def main() -> None:
             input_dim=FEATURES, d_model=LSTM_HIDDEN,
             num_heads=NUM_HEADS, num_layers=2,
             ffn_dim=128, pred_len=PRED_LEN, dropout=0.15,
+        ),
+        "Serial LSTM-Trans": LSTMTransformerModel(
+            input_dim=FEATURES, hidden_dim=HYBRID_HIDDEN,
+            num_lstm_layers=2, num_heads=HYBRID_HEADS,
+            num_transformer_layers=2, ffn_dim=256,
+            pred_len=PRED_LEN, dropout=0.2,
+        ),
+        "Parallel LSTM-Trans": ParallelLSTMTransformerModel(
+            input_dim=FEATURES, hidden_dim=HYBRID_HIDDEN,
+            num_lstm_layers=2, num_heads=HYBRID_HEADS,
+            num_transformer_layers=2, ffn_dim=256,
+            pred_len=PRED_LEN, dropout=0.2,
         ),
         "LSTM-mTrans-MLP": LSTMmTransMLPModel(
             input_dim=FEATURES, lstm_hidden=LSTM_HIDDEN,
