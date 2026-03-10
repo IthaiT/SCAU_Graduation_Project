@@ -43,14 +43,9 @@ LSTM_HIDDEN = 60
 NUM_HEADS = 5
 HEAD_DIM = 120
 
-# LSTM / Transformer baseline
-EPOCHS = 30
-PATIENCE = 10
-
-# LSTM-mTrans-MLP 需要更多轮次
-# (d_model=1 上的 LayerNorm 退化, ReZero 初始化让 mTrans 从零学起)
-MTRANS_EPOCHS = 100
-MTRANS_PATIENCE = 20
+# 统一训练配置: 所有模型使用相同 epochs 和 patience，确保公平对比
+EPOCHS = 100
+PATIENCE = 20
 
 # 数据切分
 TRAIN_RATIO = 0.72
@@ -108,9 +103,6 @@ def main() -> None:
         criterion = nn.MSELoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
-        ep = MTRANS_EPOCHS if model_name == "LSTM_mTrans_MLP" else EPOCHS
-        pat = MTRANS_PATIENCE if model_name == "LSTM_mTrans_MLP" else PATIENCE
-
         history = train_model(
             model=model,
             train_loader=train_loader,
@@ -118,8 +110,8 @@ def main() -> None:
             criterion=criterion,
             optimizer=optimizer,
             device=device,
-            epochs=ep,
-            patience=pat,
+            epochs=EPOCHS,
+            patience=PATIENCE,
             save_path=out_dir / f"{model_name}_best.pth",
             scheduler=None,
             max_grad_norm=1.0,
