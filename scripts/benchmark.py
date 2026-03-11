@@ -51,20 +51,20 @@ VAL_RATIO = 0.10
 # ── 核心: Optuna 全局最优超参数配置 (⚠️请在跑完新一轮 Optuna 后更新这里) ──
 BEST_CONFIGS: dict[str, dict[str, Any]] = {
     "LSTM": {
-        "train_args": {"batch_size": 64, "lr": 0.002014, "weight_decay": 2.226e-05},
-        "model_args": {"hidden_dim": 128, "num_layers": 1, "dropout": 0.437},
+        "train_args": {"batch_size": 32, "lr": 0.0019883297850929057, "weight_decay": 6.536284831538474e-05},
+        "model_args": {"hidden_dim": 128, "num_layers": 1, "dropout": 0.1746965602896977},
     },
     "Transformer": {
-        "train_args": {"batch_size": 32, "lr": 0.000411, "weight_decay": 0.000992},
-        "model_args": {"d_model": 64, "num_heads": 8, "num_layers": 2, "ffn_dim": 64, "dropout": 0.131},
+        "train_args": {"batch_size": 32, "lr": 0.00015415073767802167, "weight_decay": 3.697459207560768e-06},
+        "model_args": {"d_model": 64, "num_heads": 2, "num_layers": 2, "ffn_dim": 64, "dropout": 0.1016338807727642},
     },
     "LSTM_Transformer": {
-        "train_args": {"batch_size": 64, "lr": 0.004220, "weight_decay": 2.200e-05},
-        "model_args": {"hidden_dim": 64, "num_lstm_layers": 1, "num_transformer_layers": 2, "num_heads": 4, "ffn_dim": 128, "dropout": 0.384},
+        "train_args": {"batch_size": 64, "lr": 0.0011091428842490603, "weight_decay": 2.0676911571060396e-05},
+        "model_args": {"hidden_dim": 128, "num_lstm_layers": 1, "num_transformer_layers": 2, "num_heads": 8, "ffn_dim": 64, "dropout": 0.4724591100155078},
     },
     "Parallel_LSTM_Transformer": {
-        "train_args": {"batch_size": 32, "lr": 0.000414, "weight_decay": 2.680e-06},
-        "model_args": {"hidden_dim": 32, "num_lstm_layers": 1, "num_transformer_layers": 1, "num_heads": 4, "ffn_dim": 256, "dropout": 0.184},
+        "train_args": {"batch_size": 32, "lr": 0.0003143370452078691, "weight_decay": 4.412255082087176e-05},
+        "model_args": {"hidden_dim": 128, "num_lstm_layers": 2, "num_transformer_layers": 2, "num_heads": 4, "ffn_dim": 128, "dropout": 0.11076313892757544},
     },
 }
 
@@ -77,8 +77,11 @@ MODEL_LABELS = {
 }
 
 MODELS_DIR = PROJECT_ROOT / "models"
-RESULTS_DIR = PROJECT_ROOT / "results"
+TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
+RESULTS_DIR = PROJECT_ROOT / "results" / f"benchmark_{TIMESTAMP}"
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_FILE = RESULTS_DIR / "benchmark_results_advanced.txt"
+JSON_FILE = RESULTS_DIR / "benchmark_results_advanced.json"
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────
@@ -205,7 +208,7 @@ def main() -> None:
     logger.info("设备: {} | 总轮次: {}", device, NUM_RUNS)
 
     # ⚠️ 数据源切换：读取高级多模态特征
-    csv_path = PROJECT_ROOT / "data" / "csi300_features_advanced.csv"
+    csv_path = PROJECT_ROOT / "data" / "final_data.csv"
     if not csv_path.exists():
         logger.error("高级特征数据文件未找到: {}。请先运行 build_advanced_features.py！", csv_path)
         sys.exit(1)
@@ -288,7 +291,7 @@ def main() -> None:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_FILE.write_text("\n".join(lines), encoding="utf-8")
     
-    json_path = RESULTS_DIR / "benchmark_results_advanced.json"
+    json_path = JSON_FILE
     json_path.write_text(json.dumps(all_runs, indent=2, ensure_ascii=False), encoding="utf-8")
     
     logger.info("完整报告已保存 → {}", OUTPUT_FILE)

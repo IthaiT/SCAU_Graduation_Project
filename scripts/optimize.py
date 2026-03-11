@@ -15,6 +15,7 @@ import optuna
 import pandas as pd
 import torch
 import torch.nn as nn
+import json
 from loguru import logger
 from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR # 显式引入
 
@@ -157,12 +158,19 @@ def create_objective(model_name: str, df_values: np.ndarray, columns: list[str],
     return objective
 
 
+def save_best_hyperparameters(results: dict, output_path: Path):
+    """保存所有模型的最佳超参数到 JSON 文件"""
+    logger.info(f"保存最佳超参数到文件: {output_path}")
+    with output_path.open("w", encoding="utf-8") as f:
+        json.dump(results, f, indent=4, ensure_ascii=False)
+
+
 def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("HPO 平台启动 | 训练设备: {}", device)
 
     # 仅加载一次数据到内存
-    csv_path = PROJECT_ROOT / "data" / "csi300_features.csv"
+    csv_path = PROJECT_ROOT / "data" / "final_data.csv"
     df = pd.read_csv(csv_path, index_col="date", parse_dates=True)
     df_values = df.values
     columns = df.columns.tolist()
@@ -201,6 +209,11 @@ def main() -> None:
         # 持久化该模型的最优参数
         df_study = study.trials_dataframe()
         df_study.to_csv(opt_dir / f"{model_name}_trials.csv", index=False)
+
+        # 保存所有模型的最佳超参数
+    best_params_file = opt_dir / "best_hyperparameters.json"
+    save_best_hyperparameters(results, best_params_file)
+    logger.info("所有模型的最佳超参数已保存。")
 
     # 输出全局终极对比报告
     logger.info("=" * 60)
