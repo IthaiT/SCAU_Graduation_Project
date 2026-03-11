@@ -1,9 +1,10 @@
-"""V6.1 四模型多轮训练+评估基准测试: 基于 Optuna 全局最优超参数。
+"""V6.1 跨模态高维特征多轮基准测试: 基于 Optuna 最优超参数。
 
 严格对齐:
-- 模型超参数: 独立异构 (LSTM单层, Transformer多头+不同维度等)
-- 训练策略: 独立的 LR, Batch Size, Weight Decay + ReduceLROnPlateau 调度器
-- 目标: 重复 N 次完整的训练-评估流水线，统计真实的 均值±标准差
+- 数据源: csi300_features_advanced.csv (30+维高阶特征)
+- 数据流: StandardScaler
+- 模型超参数: 独立异构 (配合 FeatureProjection 架构)
+- 训练策略: 独立的 LR, Batch Size, Weight Decay + ReduceLROnPlateau
 """
 from __future__ import annotations
 
@@ -47,7 +48,7 @@ PATIENCE = 15     # 严格对齐 Optuna 搜索时的 15
 TRAIN_RATIO = 0.72
 VAL_RATIO = 0.10
 
-# ── 核心: Optuna 全局最优超参数配置 ───────────────────────────────
+# ── 核心: Optuna 全局最优超参数配置 (⚠️请在跑完新一轮 Optuna 后更新这里) ──
 BEST_CONFIGS: dict[str, dict[str, Any]] = {
     "LSTM": {
         "train_args": {"batch_size": 64, "lr": 0.002014, "weight_decay": 2.226e-05},
@@ -77,21 +78,21 @@ MODEL_LABELS = {
 
 MODELS_DIR = PROJECT_ROOT / "models"
 RESULTS_DIR = PROJECT_ROOT / "results"
-OUTPUT_FILE = RESULTS_DIR / "benchmark_results_HPO.txt"
+OUTPUT_FILE = RESULTS_DIR / "benchmark_results_advanced.txt"
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────
-def _build_model(name: str, input_dim: int, kwargs: dict[str, Any]) -> nn.Module:
-    """遵循基于字典 kwargs 动态解包的工厂模式。"""
-    if name == "LSTM":
+def _build_model(model_name: str, input_dim: int, kwargs: dict[str, Any]) -> nn.Module:
+    """遵循基于字典 kwargs 动态解包的工厂模式，适配 FeatureProjection"""
+    if model_name == "LSTM":
         return LSTMModel(input_dim=input_dim, pred_len=PRED_LEN, **kwargs)
-    elif name == "Transformer":
+    elif model_name == "Transformer":
         return TransformerModel(input_dim=input_dim, pred_len=PRED_LEN, **kwargs)
-    elif name == "LSTM_Transformer":
+    elif model_name == "LSTM_Transformer":
         return LSTMTransformerModel(input_dim=input_dim, pred_len=PRED_LEN, seq_len=SEQ_LEN, **kwargs)
-    elif name == "Parallel_LSTM_Transformer":
+    elif model_name == "Parallel_LSTM_Transformer":
         return ParallelLSTMTransformerModel(input_dim=input_dim, pred_len=PRED_LEN, **kwargs)
-    raise ValueError(f"Unknown model: {name}")
+    raise ValueError(f"未知模型: {model_name}")
 
 
 def compute_metrics(true: np.ndarray, pred: np.ndarray) -> dict[str, float]:
@@ -137,7 +138,7 @@ def run_once(
         train_args = config["train_args"]
         model_args = config["model_args"]
         
-        # 1. 为该架构创建特定 Batch Size 的 Dataloader
+        # 为该架构创建特定 Batch Size 的 Dataloader (适配 StandardScaler)
         train_loader, val_loader, test_loader, scaler_target = get_dataloaders(
             df_values=df_values, columns=columns,
             seq_len=SEQ_LEN, pred_len=PRED_LEN, batch_size=train_args["batch_size"],
@@ -156,7 +157,7 @@ def run_once(
         )
         scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-6)
 
-        # 2. 训练
+        # 训练
         train_model(
             model=model, train_loader=train_loader, val_loader=val_loader,
             criterion=criterion, optimizer=optimizer, device=device,
@@ -164,17 +165,19 @@ def run_once(
             scheduler=scheduler, max_grad_norm=1.0,
         )
 
-        # 3. 评估 (强制重新加载最佳权重)
+        # 评估 (强制重新加载最佳权重)
         model.load_state_dict(torch.load(save_path, map_location=device, weights_only=True))
         model.to(device)
         
         preds_norm, trues_norm = _evaluate_model(model, test_loader, device)
+        
+        # 此时 scaler_target 已经是 StandardScaler，inverse_transform 依然安全
         pred_r = scaler_target.inverse_transform(preds_norm).ravel()
         true_r = scaler_target.inverse_transform(trues_norm).ravel()
         
         all_metrics[name] = compute_metrics(true_r, pred_r)
 
-        # 4. 彻底的资源释放 (防止 40 次训练挤爆显存)
+        # 彻底释放显存 (防止 40 次高维特征训练挤爆 GPU)
         del model, optimizer, scheduler, train_loader, val_loader, test_loader
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -201,9 +204,10 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("设备: {} | 总轮次: {}", device, NUM_RUNS)
 
-    csv_path = PROJECT_ROOT / "data" / "csi300_features.csv"
+    # ⚠️ 数据源切换：读取高级多模态特征
+    csv_path = PROJECT_ROOT / "data" / "csi300_features_advanced.csv"
     if not csv_path.exists():
-        logger.error("数据文件未找到: {}", csv_path)
+        logger.error("高级特征数据文件未找到: {}。请先运行 build_advanced_features.py！", csv_path)
         sys.exit(1)
         
     df = pd.read_csv(csv_path, index_col="date", parse_dates=True)
@@ -211,11 +215,11 @@ def main() -> None:
     columns = df.columns.tolist()
     num_features = len(columns)
 
-    all_runs: list[dict[str, dict[str, float]]] = []
+    all_runs: list[dict[str, dict[str, float]]] =[]
     lines: list[str] =[
         f"Benchmark 开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"重复次数: {NUM_RUNS}  |  设备: {device}  |  特征数: {num_features}",
-        f"超参数: 基于 Optuna HPO 独立异构 (LSTM, Transformer 各取其优)",
+        f"重复次数: {NUM_RUNS}  |  设备: {device}  |  高阶特征数: {num_features}",
+        f"超参数: 基于 Optuna HPO 独立异构 (包含 FeatureProjection)",
         f"统一设置: SEQ_LEN={SEQ_LEN}, EPOCHS={EPOCHS}, PATIENCE={PATIENCE}",
         ""
     ]
@@ -225,7 +229,6 @@ def main() -> None:
         logger.info(">>> 第 {}/{} 轮", run_idx, NUM_RUNS)
         logger.info("=" * 60)
 
-        # 传递原始 df_values 让单轮内部构建专有的 Dataloader
         metrics = run_once(device, df_values, columns, num_features)
         all_runs.append(metrics)
 
@@ -244,7 +247,7 @@ def main() -> None:
     # ── 计算均值 & 标准差 ─────────────────────────────────────────
     lines.extend([
         "=" * 120,
-        f"  {NUM_RUNS} 轮平均 ± 标准差 (基于 Optuna HPO)",
+        f"  {NUM_RUNS} 轮平均 ± 标准差 (Advanced Features + HPO)",
         "=" * 120,
         f"{'Model':<20s} {'MSE':>16s} {'RMSE':>16s} {'MAE':>16s} {'R²':>16s} {'MAPE%':>16s} {'DA%':>16s}",
         "-" * 120
@@ -285,7 +288,7 @@ def main() -> None:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_FILE.write_text("\n".join(lines), encoding="utf-8")
     
-    json_path = RESULTS_DIR / "benchmark_results_HPO.json"
+    json_path = RESULTS_DIR / "benchmark_results_advanced.json"
     json_path.write_text(json.dumps(all_runs, indent=2, ensure_ascii=False), encoding="utf-8")
     
     logger.info("完整报告已保存 → {}", OUTPUT_FILE)
