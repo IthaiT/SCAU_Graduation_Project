@@ -1,16 +1,18 @@
-"""V6 四模型多轮训练+评估基准测试: 重复 N 次训练-评估流程，统计均值±标准差。
+"""V6.1 四模型多轮训练+评估基准测试: 基于 Optuna 全局最优超参数。
 
-适配 CSI 300 长周期数据:
-- 输入: 17 维技术指标特征 (与 train.py 一致)
-- 模型: LSTM / Transformer / Serial LSTM-Trans / Parallel LSTM-Trans
-- 策略: MSELoss, Adam(lr=0.001), seq_len=60, epochs=100, patience=20。
+严格对齐:
+- 模型超参数: 独立异构 (LSTM单层, Transformer多头+不同维度等)
+- 训练策略: 独立的 LR, Batch Size, Weight Decay + ReduceLROnPlateau 调度器
+- 目标: 重复 N 次完整的训练-评估流水线，统计真实的 均值±标准差
 """
 from __future__ import annotations
 
+import gc
 import json
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from loguru import logger
@@ -22,6 +24,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import pandas as pd  # noqa: E402
 import torch  # noqa: E402
 import torch.nn as nn  # noqa: E402
+from torch.optim.lr_scheduler import ReduceLROnPlateau  # noqa: E402
 
 from src.data.dataset import get_dataloaders  # noqa: E402
 from src.engine.trainer import train_model  # noqa: E402
@@ -35,24 +38,36 @@ from src.models.networks import (  # noqa: E402
 logger.remove()
 logger.add(sys.stderr, format="{time:YYYY-MM-DD HH:mm:ss} | {name} | {level} | {message}")
 
-# ── 超参数 (严格与 train.py 保持一致) ─────────────────────────────
+# ── 基础与数据切分参数 ────────────────────────────────────────────
 NUM_RUNS = 10
 SEQ_LEN = 60
 PRED_LEN = 1
-BATCH_SIZE = 32
-LR = 0.001
-
-LSTM_HIDDEN = 60
-NUM_HEADS = 5
-HYBRID_HIDDEN = 64
-HYBRID_HEADS = 4
-
 EPOCHS = 100
-PATIENCE = 20
+PATIENCE = 15     # 严格对齐 Optuna 搜索时的 15
 TRAIN_RATIO = 0.72
 VAL_RATIO = 0.10
 
-MODEL_NAMES =["LSTM", "Transformer", "LSTM_Transformer", "Parallel_LSTM_Transformer"]
+# ── 核心: Optuna 全局最优超参数配置 ───────────────────────────────
+BEST_CONFIGS: dict[str, dict[str, Any]] = {
+    "LSTM": {
+        "train_args": {"batch_size": 64, "lr": 0.002014, "weight_decay": 2.226e-05},
+        "model_args": {"hidden_dim": 128, "num_layers": 1, "dropout": 0.437},
+    },
+    "Transformer": {
+        "train_args": {"batch_size": 32, "lr": 0.000411, "weight_decay": 0.000992},
+        "model_args": {"d_model": 64, "num_heads": 8, "num_layers": 2, "ffn_dim": 64, "dropout": 0.131},
+    },
+    "LSTM_Transformer": {
+        "train_args": {"batch_size": 64, "lr": 0.004220, "weight_decay": 2.200e-05},
+        "model_args": {"hidden_dim": 64, "num_lstm_layers": 1, "num_transformer_layers": 2, "num_heads": 4, "ffn_dim": 128, "dropout": 0.384},
+    },
+    "Parallel_LSTM_Transformer": {
+        "train_args": {"batch_size": 32, "lr": 0.000414, "weight_decay": 2.680e-06},
+        "model_args": {"hidden_dim": 32, "num_lstm_layers": 1, "num_transformer_layers": 1, "num_heads": 4, "ffn_dim": 256, "dropout": 0.184},
+    },
+}
+
+MODEL_NAMES = list(BEST_CONFIGS.keys())
 MODEL_LABELS = {
     "LSTM": "LSTM",
     "Transformer": "Transformer",
@@ -62,37 +77,20 @@ MODEL_LABELS = {
 
 MODELS_DIR = PROJECT_ROOT / "models"
 RESULTS_DIR = PROJECT_ROOT / "results"
-OUTPUT_FILE = RESULTS_DIR / "benchmark_results.txt"
+OUTPUT_FILE = RESULTS_DIR / "benchmark_results_HPO.txt"
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────
-def _build_model(name: str, input_dim: int) -> nn.Module:
-    """遵循极简工厂模式，去除冗余模型。"""
+def _build_model(name: str, input_dim: int, kwargs: dict[str, Any]) -> nn.Module:
+    """遵循基于字典 kwargs 动态解包的工厂模式。"""
     if name == "LSTM":
-        return LSTMModel(
-            input_dim=input_dim, hidden_dim=LSTM_HIDDEN,
-            num_layers=2, pred_len=PRED_LEN, dropout=0.1,
-        )
-    if name == "Transformer":
-        return TransformerModel(
-            input_dim=input_dim, d_model=LSTM_HIDDEN,
-            num_heads=NUM_HEADS, num_layers=2,
-            ffn_dim=128, pred_len=PRED_LEN, dropout=0.15,
-        )
-    if name == "LSTM_Transformer":
-        return LSTMTransformerModel(
-            input_dim=input_dim, hidden_dim=HYBRID_HIDDEN,
-            num_lstm_layers=2, num_heads=HYBRID_HEADS,
-            num_transformer_layers=2, ffn_dim=256,
-            pred_len=PRED_LEN, dropout=0.2,
-        )
-    if name == "Parallel_LSTM_Transformer":
-        return ParallelLSTMTransformerModel(
-            input_dim=input_dim, hidden_dim=HYBRID_HIDDEN,
-            num_lstm_layers=2, num_heads=HYBRID_HEADS,
-            num_transformer_layers=2, ffn_dim=256,
-            pred_len=PRED_LEN, dropout=0.2,
-        )
+        return LSTMModel(input_dim=input_dim, pred_len=PRED_LEN, **kwargs)
+    elif name == "Transformer":
+        return TransformerModel(input_dim=input_dim, pred_len=PRED_LEN, **kwargs)
+    elif name == "LSTM_Transformer":
+        return LSTMTransformerModel(input_dim=input_dim, pred_len=PRED_LEN, seq_len=SEQ_LEN, **kwargs)
+    elif name == "Parallel_LSTM_Transformer":
+        return ParallelLSTMTransformerModel(input_dim=input_dim, pred_len=PRED_LEN, **kwargs)
     raise ValueError(f"Unknown model: {name}")
 
 
@@ -115,7 +113,7 @@ def _evaluate_model(model: nn.Module, loader: torch.utils.data.DataLoader, devic
     preds, trues = [],[]
     for X, y in loader:
         X, y = X.to(device), y.to(device)
-        pred, _ = model(X)  # 忽略 extra/attention 返回值
+        pred, _ = model(X)
         preds.append(pred.cpu().numpy())
         trues.append(y.cpu().numpy())
     return np.concatenate(preds), np.concatenate(trues)
@@ -124,37 +122,49 @@ def _evaluate_model(model: nn.Module, loader: torch.utils.data.DataLoader, devic
 # ── 单轮: 训练 + 评估 (高内聚流水线) ──────────────────────────────
 def run_once(
     device: torch.device,
-    train_loader: torch.utils.data.DataLoader,
-    val_loader: torch.utils.data.DataLoader,
-    test_loader: torch.utils.data.DataLoader,
-    scaler_target,
+    df_values: np.ndarray,
+    columns: list[str],
     num_features: int,
 ) -> dict[str, dict[str, float]]:
-    """单轮完整生命周期：创建 -> 训练 -> 加载 -> 评估，避免状态泄露。"""
+    """单轮完整生命周期：隔离训练状态，独立化 DataLoader。"""
     
-    # 使用独立的临时目录，防止压测覆盖标准训练权重
     tmp_dir = MODELS_DIR / "benchmark_tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    
     all_metrics: dict[str, dict[str, float]] = {}
 
     for name in MODEL_NAMES:
-        model = _build_model(name, num_features)
+        config = BEST_CONFIGS[name]
+        train_args = config["train_args"]
+        model_args = config["model_args"]
+        
+        # 1. 为该架构创建特定 Batch Size 的 Dataloader
+        train_loader, val_loader, test_loader, scaler_target = get_dataloaders(
+            df_values=df_values, columns=columns,
+            seq_len=SEQ_LEN, pred_len=PRED_LEN, batch_size=train_args["batch_size"],
+            target_col="close", train_ratio=TRAIN_RATIO, val_ratio=VAL_RATIO,
+        )
+
+        model = _build_model(name, num_features, model_args)
         save_path = tmp_dir / f"{name}_best.pth"
-        logger.info("  -> 训练: {} ({:,} params)", name, sum(p.numel() for p in model.parameters()))
+        logger.info("  -> 训练: {} (Batch={}, LR={:.1e})", name, train_args["batch_size"], train_args["lr"])
 
         criterion = nn.MSELoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+        optimizer = torch.optim.Adam(
+            model.parameters(), 
+            lr=train_args["lr"], 
+            weight_decay=train_args["weight_decay"]
+        )
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-6)
 
-        # 1. 训练
+        # 2. 训练
         train_model(
             model=model, train_loader=train_loader, val_loader=val_loader,
             criterion=criterion, optimizer=optimizer, device=device,
             epochs=EPOCHS, patience=PATIENCE, save_path=save_path,
-            scheduler=None, max_grad_norm=1.0,
+            scheduler=scheduler, max_grad_norm=1.0,
         )
 
-        # 2. 评估 (强制重新加载最佳权重，保证逻辑严密)
+        # 3. 评估 (强制重新加载最佳权重)
         model.load_state_dict(torch.load(save_path, map_location=device, weights_only=True))
         model.to(device)
         
@@ -163,6 +173,12 @@ def run_once(
         true_r = scaler_target.inverse_transform(trues_norm).ravel()
         
         all_metrics[name] = compute_metrics(true_r, pred_r)
+
+        # 4. 彻底的资源释放 (防止 40 次训练挤爆显存)
+        del model, optimizer, scheduler, train_loader, val_loader, test_loader
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
 
     return all_metrics
 
@@ -185,27 +201,22 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("设备: {} | 总轮次: {}", device, NUM_RUNS)
 
-    # 修复数据源：严格使用 17 维特征，与 train.py 对齐
     csv_path = PROJECT_ROOT / "data" / "csi300_features.csv"
     if not csv_path.exists():
         logger.error("数据文件未找到: {}", csv_path)
         sys.exit(1)
         
     df = pd.read_csv(csv_path, index_col="date", parse_dates=True)
+    df_values = df.values
     columns = df.columns.tolist()
-    num_features = len(columns)  # = 17
-
-    train_loader, val_loader, test_loader, scaler_target = get_dataloaders(
-        df_values=df.values, columns=columns,
-        seq_len=SEQ_LEN, pred_len=PRED_LEN, batch_size=BATCH_SIZE,
-        target_col="close", train_ratio=TRAIN_RATIO, val_ratio=VAL_RATIO,
-    )
+    num_features = len(columns)
 
     all_runs: list[dict[str, dict[str, float]]] = []
     lines: list[str] =[
         f"Benchmark 开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"重复次数: {NUM_RUNS}  |  设备: {device}  |  特征数: {num_features}",
-        f"超参数: SEQ_LEN={SEQ_LEN}, EPOCHS={EPOCHS}, PATIENCE={PATIENCE}, BATCH_SIZE={BATCH_SIZE}, LR={LR}",
+        f"超参数: 基于 Optuna HPO 独立异构 (LSTM, Transformer 各取其优)",
+        f"统一设置: SEQ_LEN={SEQ_LEN}, EPOCHS={EPOCHS}, PATIENCE={PATIENCE}",
         ""
     ]
 
@@ -214,10 +225,10 @@ def main() -> None:
         logger.info(">>> 第 {}/{} 轮", run_idx, NUM_RUNS)
         logger.info("=" * 60)
 
-        metrics = run_once(device, train_loader, val_loader, test_loader, scaler_target, num_features)
+        # 传递原始 df_values 让单轮内部构建专有的 Dataloader
+        metrics = run_once(device, df_values, columns, num_features)
         all_runs.append(metrics)
 
-        # 写入并打印本轮结果
         lines.append(f"===== 第 {run_idx}/{NUM_RUNS} 轮 =====")
         lines.append(_fmt_table_header())
         for name in MODEL_NAMES:
@@ -233,7 +244,7 @@ def main() -> None:
     # ── 计算均值 & 标准差 ─────────────────────────────────────────
     lines.extend([
         "=" * 120,
-        f"  {NUM_RUNS} 轮平均 ± 标准差",
+        f"  {NUM_RUNS} 轮平均 ± 标准差 (基于 Optuna HPO)",
         "=" * 120,
         f"{'Model':<20s} {'MSE':>16s} {'RMSE':>16s} {'MAE':>16s} {'R²':>16s} {'MAPE%':>16s} {'DA%':>16s}",
         "-" * 120
@@ -274,7 +285,7 @@ def main() -> None:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_FILE.write_text("\n".join(lines), encoding="utf-8")
     
-    json_path = RESULTS_DIR / "benchmark_results.json"
+    json_path = RESULTS_DIR / "benchmark_results_HPO.json"
     json_path.write_text(json.dumps(all_runs, indent=2, ensure_ascii=False), encoding="utf-8")
     
     logger.info("完整报告已保存 → {}", OUTPUT_FILE)
