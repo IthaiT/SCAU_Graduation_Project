@@ -36,19 +36,23 @@ SEQ_LEN = 60
 PRED_LEN = 1
 EPOCHS = 100
 PATIENCE = 15  # 早停耐心值
-N_TRIALS = 50  # 每个模型搜索 50 组超参数 (可根据算力调整)
+N_TRIALS = 150 # 每个模型搜索 50 组超参数 (可根据算力调整)
 
 
 def get_model_and_space(trial: optuna.Trial, model_name: str, num_features: int) -> nn.Module:
     """定义并返回与特定架构匹配的超参空间与实例。"""
     
     # 共享的基础超参搜索空间 (结构对等)
-    dropout = trial.suggest_float("dropout", 0.1, 0.5)
+    dropout = trial.suggest_float("dropout", 0.2, 0.6)
     # 注意力头数要求被 hidden_dim 整除，故 hidden_dim 限制在能被 2,4,8 整除的值
     hidden_dim = trial.suggest_categorical("hidden_dim",[32, 64, 128]) 
+    
+    # 动态 FFN 倍数，保证网络结构的合理性
+    ffn_multiplier = trial.suggest_int("ffn_multiplier", 2, 4)
+    ffn_dim = hidden_dim * ffn_multiplier
 
     if model_name == "LSTM":
-        num_layers = trial.suggest_int("num_layers", 1, 3)
+        num_layers = trial.suggest_int("num_layers", 1, 2)
         return LSTMModel(
             input_dim=num_features, hidden_dim=hidden_dim,
             num_layers=num_layers, pred_len=PRED_LEN, dropout=dropout
@@ -56,8 +60,7 @@ def get_model_and_space(trial: optuna.Trial, model_name: str, num_features: int)
 
     elif model_name == "Transformer":
         num_heads = trial.suggest_categorical("num_heads", [2, 4, 8])
-        num_layers = trial.suggest_int("num_layers", 1, 3)
-        ffn_dim = trial.suggest_categorical("ffn_dim", [64, 128, 256])
+        num_layers = trial.suggest_int("num_layers", 1, 2)
         return TransformerModel(
             input_dim=num_features, d_model=hidden_dim,
             num_heads=num_heads, num_layers=num_layers,
@@ -68,7 +71,6 @@ def get_model_and_space(trial: optuna.Trial, model_name: str, num_features: int)
         num_lstm_layers = trial.suggest_int("num_lstm_layers", 1, 2)
         num_trans_layers = trial.suggest_int("num_trans_layers", 1, 2)
         num_heads = trial.suggest_categorical("num_heads", [2, 4, 8])
-        ffn_dim = trial.suggest_categorical("ffn_dim",[64, 128, 256])
         return LSTMTransformerModel(
             input_dim=num_features, hidden_dim=hidden_dim,
             num_lstm_layers=num_lstm_layers, num_heads=num_heads,
@@ -80,7 +82,6 @@ def get_model_and_space(trial: optuna.Trial, model_name: str, num_features: int)
         num_lstm_layers = trial.suggest_int("num_lstm_layers", 1, 2)
         num_trans_layers = trial.suggest_int("num_trans_layers", 1, 2)
         num_heads = trial.suggest_categorical("num_heads",[2, 4, 8])
-        ffn_dim = trial.suggest_categorical("ffn_dim",[64, 128, 256])
         return ParallelLSTMTransformerModel(
             input_dim=num_features, hidden_dim=hidden_dim,
             num_lstm_layers=num_lstm_layers, num_heads=num_heads,
@@ -96,9 +97,9 @@ def create_objective(model_name: str, df_values: np.ndarray, columns: list[str],
     
     def objective(trial: optuna.Trial) -> float:
         # 1. 训练策略超参搜索
-        lr = trial.suggest_float("lr", 1e-5, 1e-2, log=True)
-        batch_size = trial.suggest_categorical("batch_size", [16, 32, 64])
-        weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
+        lr = trial.suggest_float("lr", 1e-5, 5e-3, log=True)
+        batch_size = trial.suggest_categorical("batch_size", [32, 64, 128, 256])
+        weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-1, log=True)
 
         # 2. 数据准备 (随 Batch Size 动态生成 Dataloader)
         train_loader, val_loader, _, _ = get_dataloaders(

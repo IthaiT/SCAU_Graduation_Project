@@ -1,54 +1,55 @@
 {
     "LSTM": {
-        "best_loss": 0.0001674279462479587,
+        "best_loss": 0.00016958172636805102,
         "best_params": {
-            "lr": 0.0019883297850929057,
-            "batch_size": 32,
-            "weight_decay": 6.536284831538474e-05,
-            "dropout": 0.1746965602896977,
+            "lr": 0.0020678530176665524,
+            "batch_size": 128,
+            "weight_decay": 1.5556957230581666e-05,
+            "dropout": 0.21597852403871323,
             "hidden_dim": 128,
+            "ffn_multiplier": 2,
             "num_layers": 1
         }
     },
     "Transformer": {
-        "best_loss": 0.00020454879164130295,
+        "best_loss": 0.0002350138612590464,
         "best_params": {
-            "lr": 0.00015415073767802167,
+            "lr": 0.0010540227011718209,
             "batch_size": 32,
-            "weight_decay": 3.697459207560768e-06,
-            "dropout": 0.1016338807727642,
-            "hidden_dim": 64,
+            "weight_decay": 0.0009590216330699327,
+            "dropout": 0.2646631095765896,
+            "hidden_dim": 128,
+            "ffn_multiplier": 4,
             "num_heads": 2,
-            "num_layers": 2,
-            "ffn_dim": 64
+            "num_layers": 2
         }
     },
     "LSTM_Transformer": {
-        "best_loss": 0.0001704613584609303,
+        "best_loss": 0.00016734894234105013,
         "best_params": {
-            "lr": 0.0011091428842490603,
-            "batch_size": 64,
-            "weight_decay": 2.0676911571060396e-05,
-            "dropout": 0.4724591100155078,
+            "lr": 0.003475755855548101,
+            "batch_size": 128,
+            "weight_decay": 2.4163104753475604e-05,
+            "dropout": 0.40810640767923295,
             "hidden_dim": 128,
+            "ffn_multiplier": 2,
             "num_lstm_layers": 1,
             "num_trans_layers": 2,
-            "num_heads": 8,
-            "ffn_dim": 64
+            "num_heads": 4
         }
     },
     "Parallel_LSTM_Transformer": {
-        "best_loss": 0.0002649101604349978,
+        "best_loss": 0.00021760280651506037,
         "best_params": {
-            "lr": 0.0003143370452078691,
-            "batch_size": 32,
-            "weight_decay": 4.412255082087176e-05,
-            "dropout": 0.11076313892757544,
+            "lr": 0.0009326105041852174,
+            "batch_size": 256,
+            "weight_decay": 1.7995970896437438e-05,
+            "dropout": 0.33473885903351597,
             "hidden_dim": 128,
-            "num_lstm_layers": 2,
-            "num_trans_layers": 2,
-            "num_heads": 4,
-            "ffn_dim": 128
+            "ffn_multiplier": 3,
+            "num_lstm_layers": 1,
+            "num_trans_layers": 1,
+            "num_heads": 8
         }
     }
 }
