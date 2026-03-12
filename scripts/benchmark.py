@@ -51,20 +51,20 @@ VAL_RATIO = 0.10
 # ── 核心: Optuna 全局最优超参数配置 (⚠️请在跑完新一轮 Optuna 后更新这里) ──
 BEST_CONFIGS: dict[str, dict[str, Any]] = {
     "LSTM": {
-        "train_args": {"batch_size": 256, "lr": 0.004938674499343076, "weight_decay": 0.00020626995712758373},
-        "model_args": {"hidden_dim": 128, "num_layers": 1, "dropout": 0.2463641272235208},
+        "train_args": {"batch_size": 128, "lr": 0.0020678530176665524, "weight_decay": 1.5556957230581666e-05},
+        "model_args": {"hidden_dim": 128, "num_layers": 1, "dropout": 0.21597852403871323},
     },
     "Transformer": {
-        "train_args": {"batch_size": 32, "lr": 0.000214215204983697, "weight_decay": 0.0003397134314323268},
-        "model_args": {"d_model": 128, "num_heads": 4, "num_layers": 2, "ffn_dim": 256, "dropout": 0.20742863780082638},
+        "train_args": {"batch_size": 32, "lr": 0.0010540227011718209, "weight_decay": 0.0009590216330699327},
+        "model_args": {"d_model": 128, "num_heads": 2, "num_layers": 2, "ffn_dim": 4 * 128, "dropout": 0.2646631095765896},
     },
     "LSTM_Transformer": {
-        "train_args": {"batch_size": 64, "lr": 0.0012129325868794677, "weight_decay": 2.1511066282761358e-05},
-        "model_args": {"hidden_dim": 128, "num_lstm_layers": 1, "num_transformer_layers": 1, "num_heads": 8, "ffn_dim": 256, "dropout": 0.43402307476461705},
+        "train_args": {"batch_size": 128, "lr": 0.003475755855548101, "weight_decay": 2.4163104753475604e-05},
+        "model_args": {"hidden_dim": 128, "num_lstm_layers": 1, "num_transformer_layers": 2, "num_heads": 4, "ffn_dim": 2 * 128, "dropout": 0.40810640767923295},
     },
     "Parallel_LSTM_Transformer": {
-        "train_args": {"batch_size": 256, "lr": 0.0008979789752686359, "weight_decay": 0.0009331870928123205},
-        "model_args": {"hidden_dim": 128, "num_lstm_layers": 2, "num_transformer_layers": 1, "num_heads": 2, "ffn_dim": 256, "dropout": 0.22795558361053994},
+        "train_args": {"batch_size": 256, "lr": 0.0009326105041852174, "weight_decay": 1.7995970896437438e-05},
+        "model_args": {"hidden_dim": 128, "num_lstm_layers": 1, "num_transformer_layers": 1, "num_heads": 8, "ffn_dim": 3 * 128, "dropout": 0.33473885903351597},
     },
 }
 

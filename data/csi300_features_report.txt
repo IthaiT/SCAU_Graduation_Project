@@ -1,5 +1,5 @@
 CSV File Report
-Total columns: 32
+Total columns: 31
 Empty columns: 0
 Empty or zero-only columns: 1
 Empty or zero-only columns list:

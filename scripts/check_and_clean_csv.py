@@ -9,7 +9,7 @@ INPUT_CSV = DATA_DIR / "csi300_features_advanced.csv"
 OUTPUT_CSV = DATA_DIR / "final_data.csv"
 REPORT_FILE = DATA_DIR / "csi300_features_report.txt"
 
-def check_and_clean_csv():
+def check_and_clean_csv(columns : list):
     logger.info(f"Loading CSV file: {INPUT_CSV}")
     if not INPUT_CSV.exists():
         logger.error(f"File not found: {INPUT_CSV}")
@@ -45,6 +45,12 @@ def check_and_clean_csv():
     if empty_or_zero_columns:
         df.drop(columns=empty_or_zero_columns, inplace=True)
         logger.info(f"Dropped {len(empty_or_zero_columns)} empty or zero-only columns.")
+    for column in columns:
+        if column in df.columns:
+            df.drop(columns=[column], inplace=True)
+            logger.info(f"Column '{column}' has been removed.")
+        else:
+            logger.info(f"Column '{column}' does not exist in the file.")
 
     # Log the number of rows remaining after cleaning
     remaining_rows = len(df)
@@ -60,5 +66,14 @@ def check_and_clean_csv():
     df.to_csv(OUTPUT_CSV, index=False)
     logger.info(f"Cleaned CSV saved to: {OUTPUT_CSV}")
 
+
+
 if __name__ == "__main__":
-    check_and_clean_csv()
+    column_name = [ 
+                    "copper_ret",
+                    "gold_ret",
+                    "sp500_ret",
+                    "us10y_diff",
+                    "market_vol_10d"
+    ]
+    check_and_clean_csv(column_name)

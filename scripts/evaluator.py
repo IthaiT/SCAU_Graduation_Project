@@ -75,12 +75,12 @@ MODELS_DIR = PROJECT_ROOT / "models"
 RESULTS_DIR = PROJECT_ROOT / "results"
 MODEL_NAMES = ["LSTM", "Transformer", "LSTM_Transformer", "Parallel_LSTM_Transformer"]
 
-# 严格对齐 benchmark.py 的最优模型参数
+# 更新最优模型参数
 BEST_ARCH_CONFIGS: dict[str, dict[str, Any]] = {
-    "LSTM": {"hidden_dim": 128, "num_layers": 1, "dropout": 0.1747},
-    "Transformer": {"d_model": 64, "num_heads": 2, "num_layers": 2, "ffn_dim": 64, "dropout": 0.1016},
-    "LSTM_Transformer": {"hidden_dim": 128, "num_lstm_layers": 1, "num_transformer_layers": 2, "num_heads": 8, "ffn_dim": 64, "dropout": 0.4724},
-    "Parallel_LSTM_Transformer": {"hidden_dim": 128, "num_lstm_layers": 2, "num_transformer_layers": 2, "num_heads": 4, "ffn_dim": 128, "dropout": 0.1107},
+    "LSTM": {"hidden_dim": 128, "num_layers": 1, "dropout": 0.21597852403871323},
+    "Transformer": {"d_model": 128, "num_heads": 2, "num_layers": 2, "ffn_dim": 4 * 128, "dropout": 0.2646631095765896},
+    "LSTM_Transformer": {"hidden_dim": 128, "num_lstm_layers": 1, "num_transformer_layers": 2, "num_heads": 4, "ffn_dim": 2 * 128, "dropout": 0.40810640767923295},
+    "Parallel_LSTM_Transformer": {"hidden_dim": 128, "num_lstm_layers": 1, "num_transformer_layers": 1, "num_heads": 8, "ffn_dim": 3 * 128, "dropout": 0.33473885903351597},
 }
 
 # ── 工具函数 ──────────────────────────────────────────────────────

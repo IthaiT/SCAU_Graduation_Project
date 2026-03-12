@@ -42,26 +42,25 @@ PATIENCE = 15
 TRAIN_RATIO = 0.72
 VAL_RATIO = 0.10
 
-# ── 核心: 严格对齐 benchmark.py 的 Optuna 全局最优超参数 ────────
+# ── 核心: Optuna 全局最优超参数配置 (⚠️请在跑完新一轮 Optuna 后更新这里) ──
 BEST_CONFIGS: dict[str, dict[str, Any]] = {
     "LSTM": {
-        "train_args": {"batch_size": 32, "lr": 0.0019883, "weight_decay": 6.536e-05},
-        "model_args": {"hidden_dim": 128, "num_layers": 1, "dropout": 0.1747},
+        "train_args": {"batch_size": 128, "lr": 0.0020678530176665524, "weight_decay": 1.5556957230581666e-05},
+        "model_args": {"hidden_dim": 128, "num_layers": 1, "dropout": 0.21597852403871323},
     },
     "Transformer": {
-        "train_args": {"batch_size": 32, "lr": 0.0001541, "weight_decay": 3.697e-06},
-        "model_args": {"d_model": 64, "num_heads": 2, "num_layers": 2, "ffn_dim": 64, "dropout": 0.1016},
+        "train_args": {"batch_size": 32, "lr": 0.0010540227011718209, "weight_decay": 0.0009590216330699327},
+        "model_args": {"d_model": 128, "num_heads": 2, "num_layers": 2, "ffn_dim": 4 * 128, "dropout": 0.2646631095765896},
     },
     "LSTM_Transformer": {
-        "train_args": {"batch_size": 64, "lr": 0.0011091, "weight_decay": 2.067e-05},
-        "model_args": {"hidden_dim": 128, "num_lstm_layers": 1, "num_transformer_layers": 2, "num_heads": 8, "ffn_dim": 64, "dropout": 0.4724},
+        "train_args": {"batch_size": 128, "lr": 0.003475755855548101, "weight_decay": 2.4163104753475604e-05},
+        "model_args": {"hidden_dim": 128, "num_lstm_layers": 1, "num_transformer_layers": 2, "num_heads": 4, "ffn_dim": 2 * 128, "dropout": 0.40810640767923295},
     },
     "Parallel_LSTM_Transformer": {
-        "train_args": {"batch_size": 32, "lr": 0.0003143, "weight_decay": 4.412e-05},
-        "model_args": {"hidden_dim": 128, "num_lstm_layers": 2, "num_transformer_layers": 2, "num_heads": 4, "ffn_dim": 128, "dropout": 0.1107},
+        "train_args": {"batch_size": 256, "lr": 0.0009326105041852174, "weight_decay": 1.7995970896437438e-05},
+        "model_args": {"hidden_dim": 128, "num_lstm_layers": 1, "num_transformer_layers": 1, "num_heads": 8, "ffn_dim": 3 * 128, "dropout": 0.33473885903351597},
     },
 }
-
 
 def _build_model(model_name: str, input_dim: int, kwargs: dict[str, Any]) -> nn.Module:
     """遵循基于字典 kwargs 动态解包的工厂模式。"""

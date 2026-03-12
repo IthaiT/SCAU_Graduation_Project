@@ -54,8 +54,7 @@ def fetch_smart_money(index_df: pd.DataFrame) -> pd.DataFrame | None:
         df_hk["日期"] = pd.to_datetime(df_hk["日期"])
         df_hk = df_hk.set_index("日期")
         # 使用 shift(1) 确保使用的是 T-1 及之前的历史资金流
-        res["north_flow_ma5"] = df_hk["当日资金流入"].shift(1).rolling(5).mean()
-        res["north_flow_ma20"] = df_hk["当日资金流入"].shift(1).rolling(20).mean()
+        res["north_flow"] = df_hk["当日资金流入"]
     except Exception as e:
         logger.warning(f"北向数据获取失败: {e}")
 
