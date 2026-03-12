@@ -1,13 +1,6 @@
 CSV File Report
-Total columns: 31
+Total columns: 32
 Empty columns: 0
-Empty or zero-only columns: 8
+Empty or zero-only columns: 1
 Empty or zero-only columns list:
-- margin_ret_5d
-- margin_ret_20d
-- shibor_diff
-- pe_quantile_252d
-- dy_quantile_252d
-- gspc_log_ret
-- vix_pct
-- us_10y_diff
+- margin_bal_ret
