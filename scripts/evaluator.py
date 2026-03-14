@@ -55,13 +55,13 @@ _COLORS: dict[str, str] = {
     "LSTM": "#E64B35",               # 朱红色
     "Transformer": "#4DBBD5",        # 湖蓝色
     "LSTM_Transformer": "#00A087",   # 翠绿色
-    "Parallel_LSTM_Transformer": "#3C5488", # 藏青色
+    # "Parallel_LSTM_Transformer": "#3C5488", # 藏青色
 }
 _LABELS: dict[str, str] = {
     "LSTM": "LSTM",
     "Transformer": "Transformer",
     "LSTM_Transformer": "Serial LSTM-Trans",
-    "Parallel_LSTM_Transformer": "Parallel LSTM-Trans",
+    # "Parallel_LSTM_Transformer": "Parallel LSTM-Trans",
 }
 
 # ── 基础配置 ──────────────────────────────────────────────────────
@@ -73,14 +73,13 @@ VAL_RATIO = 0.10
 
 MODELS_DIR = PROJECT_ROOT / "models"
 RESULTS_DIR = PROJECT_ROOT / "results"
-MODEL_NAMES = ["LSTM", "Transformer", "LSTM_Transformer", "Parallel_LSTM_Transformer"]
+MODEL_NAMES = ["LSTM", "Transformer", "LSTM_Transformer"]
 
-# 严格对齐 benchmark.py 的最优模型参数
+# 更新最优模型参数
 BEST_ARCH_CONFIGS: dict[str, dict[str, Any]] = {
-    "LSTM": {"hidden_dim": 128, "num_layers": 1, "dropout": 0.1747},
-    "Transformer": {"d_model": 64, "num_heads": 2, "num_layers": 2, "ffn_dim": 64, "dropout": 0.1016},
-    "LSTM_Transformer": {"hidden_dim": 128, "num_lstm_layers": 1, "num_transformer_layers": 2, "num_heads": 8, "ffn_dim": 64, "dropout": 0.4724},
-    "Parallel_LSTM_Transformer": {"hidden_dim": 128, "num_lstm_layers": 2, "num_transformer_layers": 2, "num_heads": 4, "ffn_dim": 128, "dropout": 0.1107},
+    "LSTM": {"hidden_dim": 128, "num_layers": 1, "dropout": 0.21597852403871323},
+    "Transformer": {"d_model": 128, "num_heads": 2, "num_layers": 2, "ffn_dim": 4 * 128, "dropout": 0.2646631095765896},
+    "LSTM_Transformer": {"hidden_dim": 128, "num_lstm_layers": 1, "num_transformer_layers": 2, "num_heads": 4, "ffn_dim": 2 * 128, "dropout": 0.40810640767923295},
 }
 
 # ── 工具函数 ──────────────────────────────────────────────────────
