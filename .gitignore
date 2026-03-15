@@ -7,3 +7,5 @@ results/
 *.fls
 *.log
 *.synctex.gz
+*.toc
+*.out
