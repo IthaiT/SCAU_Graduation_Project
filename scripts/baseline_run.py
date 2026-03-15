@@ -40,22 +40,13 @@ def get_strictly_aligned_data():
         batch_size=128, target_col=TARGET_COL, train_ratio=0.72, val_ratio=0.10,
     )
 
-    # ==========================================
-    # 1. 为 XGBoost 准备严格对齐的展平数据
-    # dataset.X 形状为 (N, seq_len, num_features) -> 展平为 (N, seq_len * num_features)
-    # dataset.y 形状为 (N, 1) -> 展平为 (N,)
-    # ==========================================
     xgb_X_train = train_loader.dataset.X.numpy().reshape(len(train_loader.dataset), -1)
     xgb_y_train = train_loader.dataset.y.numpy().ravel()
     
     xgb_X_val = val_loader.dataset.X.numpy().reshape(len(val_loader.dataset), -1)
     xgb_y_val = val_loader.dataset.y.numpy().ravel()
 
-    # ==========================================
-    # 2. 为 ARIMA 准备连续的 1D 时序序列
-    # ==========================================
     target_idx = columns.index(TARGET_COL)
-    # 使用你 dataset.py 里的同一把 Scaler 进行归一化
     target_scaled = scaler_target.transform(df.values[:, target_idx:target_idx+1]).ravel()
     
     n = len(df.values)
@@ -63,7 +54,7 @@ def get_strictly_aligned_data():
     t2 = int(n * (0.72 + 0.10))
     
     arima_train_seq = target_scaled[:t1]
-    arima_train_val_seq = target_scaled[:t2] # 用于评估验证集时做 history
+    arima_train_val_seq = target_scaled[:t2] 
     
     return (xgb_X_train, xgb_y_train, xgb_X_val, xgb_y_val), \
            (arima_train_seq, arima_train_val_seq, xgb_y_val)
@@ -95,13 +86,20 @@ def optimize_xgb(xgb_data):
     
     logger.success(f"✅ XGBoost 最佳验证集 MSE: {study.best_value:.6f}")
     
-    # 用最佳参数训练最终模型并保存
-    best_model = xgb.XGBRegressor(**study.best_params, objective='reg:squarederror', n_jobs=-1, random_state=42)
+    # ---------------------------------------------------------
+    # 修改点 1：将最佳超参数直接保存到 JSON 文件中
+    # ---------------------------------------------------------
+    best_params_path = MODELS_DIR / "XGBoost_best_params.json"
+    with open(best_params_path, "w", encoding="utf-8") as f:
+        json.dump(study.best_params, f, indent=4)
+    logger.info(f"XGBoost 最佳超参数已保存至: {best_params_path}")
+    
+    best_model = xgb.XGBRegressor(**study.best_params, objective='reg:squarederror', n_jobs=-1, device='cuda', random_state=42)
     best_model.fit(X_train, y_train, eval_set=[(X_train, y_train), (X_val, y_val)], verbose=False)
     
     results = best_model.evals_result()
-    history = {"train_loss": [x**2 for x in results['validation_0']['rmse']], 
-               "val_loss":[x**2 for x in results['validation_1']['rmse']]}
+    history = {"train_loss":[float(x**2) for x in results['validation_0']['rmse']], 
+               "val_loss":[float(x**2) for x in results['validation_1']['rmse']]}
     
     best_model.save_model(MODELS_DIR / "XGBoost_best.json")
     (MODELS_DIR / "XGBoost_history.json").write_text(json.dumps(history))
@@ -113,14 +111,10 @@ def optimize_arima(arima_data):
     
     def objective(trial):
         p = trial.suggest_int('p', 0, 5)
-        d = trial.suggest_int('d', 0, 1) # 时序通常一阶差分即可平稳
+        d = trial.suggest_int('d', 0, 1) 
         q = trial.suggest_int('q', 0, 5)
         try:
-            # 在 train_seq 上拟合参数
             model = ARIMA(train_seq, order=(p, d, q)).fit()
-            
-            # 核心技巧：使用 apply 方法将训练好的参数作用于包含 val 的更长序列
-            # 这会产生单步滚动预测，fittedvalues 的最后 len(y_val_true) 个值刚好与 DataLoader 里的 val_y 一一对应！
             res = model.apply(train_val_seq)
             arima_val_preds = res.fittedvalues[-len(y_val_true):]
             
@@ -134,7 +128,14 @@ def optimize_arima(arima_data):
     
     logger.success(f"✅ ARIMA 最佳参数: {study.best_params}, 最佳 MSE: {study.best_value:.6f}")
     
-    # 拟合最终模型并保存
+    # ---------------------------------------------------------
+    # 修改点 2：将最佳超参数直接保存到 JSON 文件中
+    # ---------------------------------------------------------
+    best_params_path = MODELS_DIR / "ARIMA_best_params.json"
+    with open(best_params_path, "w", encoding="utf-8") as f:
+        json.dump(study.best_params, f, indent=4)
+    logger.info(f"ARIMA 最佳超参数已保存至: {best_params_path}")
+    
     best_model = ARIMA(train_val_seq, order=(study.best_params['p'], study.best_params['d'], study.best_params['q'])).fit()
     with open(MODELS_DIR / "ARIMA_best.pkl", "wb") as f:
         pickle.dump(best_model, f)
@@ -144,9 +145,6 @@ if __name__ == "__main__":
     xgb_data, arima_data = get_strictly_aligned_data()
     
     optimize_xgb(xgb_data)
+    # optimize_arima(arima_data)
     
-    # ARIMA 在大图上搜索太慢，为了提速可以只取过去 2000 个点作为搜索基础。
-    # 这里我们完整传入以保证严谨性，如果觉得慢，可将 n_trials 调为 50。
-    optimize_arima(arima_data)
-    
-    logger.success("所有异构 Baseline 搜索及训练完毕，现在你可以运行 evaluator.py 进行终极对决了！")
+    logger.success("所有异构 Baseline 搜索及训练完毕，最佳超参数已被保存！")

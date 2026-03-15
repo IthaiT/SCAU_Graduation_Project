@@ -1,6 +1,5 @@
 % !TEX program = xelatex
 \documentclass[UTF8,AutoFakeBold=1,AutoFakeSlant,zihao=-4]{SCAU}
-
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{multirow}
@@ -11,6 +10,9 @@
 \usepackage{ctex}
 \usepackage{color}
 \usepackage{placeins}
+\usepackage{graphicx}
+\usepackage{tabularx}
+\usepackage{float}
 
 \definecolor{lightgray}{rgb}{.9,.9,.9}
 \definecolor{darkgray}{rgb}{.4,.4,.4}
@@ -54,13 +56,13 @@
 }
 
 % ===== 封面信息（占位）=====
-\newcommand{\thesisTitle}{论文题目}
-\newcommand{\yourDept}{学院}
-\newcommand{\yourMajor}{统计学}
-\newcommand{\yourName}{HAI}
-\newcommand{\yourMentor}{HAI}
-\newcommand{\yourjob}{职称}
-\newcommand{\studentID}{202212345678}
+\newcommand{\thesisTitle}{基于LSTM-Transformer架构的量价预测模型实现与研究}
+\newcommand{\yourDept}{数学与信息学院 软件学院}
+\newcommand{\yourMajor}{计算机科学与技术}
+\newcommand{\yourName}{郑裕涛}
+\newcommand{\yourMentor}{张春玲}
+\newcommand{\yourjob}{讲师}
+\newcommand{\studentID}{202225310228}
 \newcommand{\Date}{\zhtoday}
 
 % 英文信息（占位）
@@ -101,200 +103,368 @@
 
 % ==================== 正文 ====================
 \section{绪论}
-
-\subsection{研究背景}
-
-\subsubsection{行业发展现状}
-此处填写行业发展现状内容，建议先说明市场规模与结构特征，再引出研究对象与研究价值。示例脚注可用于补充说明\footnote{此处为脚注示例，可用于解释术语、数据口径或补充来源。}。
-
-\paragraph{四级标题示例一}
-此处展示四级标题格式。若正文层级较深，建议仅在必要处使用四级标题，保持目录与阅读体验清晰。
-
-\paragraph{四级标题示例二}
-此处可补充研究场景、业务问题或理论问题的具体描述。
-
-\subsubsection{研究问题提出}
-根据 \citeauthor{smith2022deep}（\citeyear{smith2022deep}）和 \cite{chen2023neural}，复杂任务通常需要同时关注结果质量与可解释性。本模板建议将“问题定义、方法路线、验证逻辑”在绪论中明确写出。
-
-\subsection{研究意义}
-
-\subsubsection{理论意义}
-可从以下角度组织理论意义：
-\begin{enumerate}
-  \item 此处填写理论补充点一，例如研究对象的细分化价值。
-  \item 此处填写理论补充点二，例如方法框架的迁移意义。
-  \item 此处填写理论补充点三，例如跨场景比较的外部有效性讨论。
-\end{enumerate}
-
-\subsubsection{实践意义}
-可从以下角度组织实践意义：
+\subsection{研究背景与意义}
 \begin{itemize}
-  \item 对业务决策者：此处填写可执行建议与应用边界。
-  \item 对管理者：此处填写策略优化与流程改进要点。
-  \item 对后续研究者：此处填写可复现与可扩展方向。
+  \item 传统金融量化谈到深度学习的崛起。
+\end{itemize}
+\subsection{国内外研究现状}
+\subsubsection{传统统计学模型在金融预测中的应用（ARIMA）}
+\subsubsection{机器学习模型在金融预测中的应用（XGBoost）}
+\subsubsection{深度学习在时间序列预测中的应用（LSTM）}
+\subsubsection{Transformer架构在时间序列中的前沿探索}
+\subsection{本文主要研究内容与贡献}
+\begin{itemize}
+  \item 融合模型
+\end{itemize}
+\subsection{论文组织结构}
+
+\section{相关理论与技术基础}
+\subsection{时间序列预测基本理论}
+\begin{itemize}
+  \item 金融时间序列的非平稳性、非线性特征
+\end{itemize}
+\subsection{长短期记忆网络（LSTM）原理}
+\begin{itemize}
+  \item 画出LSTM的细胞结构图
+  \item 写出遗忘门、输入门、输出门的数学公式
+\end{itemize}
+\subsection{Transformer与自注意力机制（Self-Attention）}
+\begin{itemize}
+  \item Transformer原理图
+  \item 多头注意力机制（Multi-Head Attention）的数学推导。
+\end{itemize}
+\subsection{深度学习模型评价指标}
+\begin{itemize}
+  \item 列出 MSE，RMSE, MAE, R²，MAPE公式。
 \end{itemize}
 
-\subsection{国内外研究现状}
+\section{多维量价特征工程与数据处理}
+\subsection{实验数据来源与说明}
+本文选取\textbf{沪深300指数（CSI 300）}作为主要研究标的。沪深300指数由上海和深圳证券交易所中市值大、流动性好的300只股票组成，综合反映了中国A股市场的整体表现，具有代表性强、数据连续性好的特点，是检验量价预测模型的理想对象。
+实验使用的日频行情数据时间跨度为\textbf{2006年3月1日至2025年12月31日}。原始数据字段包括：日期（\texttt{date}）、开盘价（\texttt{open}）、最高价（\texttt{high}）、最低价（\texttt{low}）、收盘价（\texttt{close}）、成交量（\texttt{volume}）、成交额（\texttt{amount}）。金融时间序列常因市场节假日、休市等原因产生缺失值。为维持时间序列的连续性，本实验采用金融数据分析中广泛使用的\textbf{前向填充（Forward Fill, ffill）}方法进行处理。即，若某交易日数据缺失，则使用前一个有效交易日的数值进行填充。此方法假设市场在非交易期间状态未发生突变，是处理金融日历数据缺失的合理惯例。
 
-\subsubsection{国外研究综述}
-此处填写国外文献综述，建议按“早期研究路径、近期方法演进、现有争议点”三段展开。可参考 \cite{wilson2021machine} 的方法体系组织综述逻辑。
+\subsection{基础量价数据分析}
+原始行情数据是市场行为最直接的记录，构成了特征工程的基础层。每个交易日的数据包含以下核心字段：
+\begin{itemize}
+  \item \textbf{开盘价（Open）}：交易日开始时的第一笔成交价格。
+  \item \textbf{最高价（High）}：交易日内达到的最高成交价格。
+  \item \textbf{最低价（Low）}：交易日内达到的最低成交价格。
+  \item \textbf{收盘价（Close）}：交易日结束前的最后一笔成交价格，是金融分析中最常使用的基准价格。
+  \item \textbf{成交量（Volume）}：交易日内成交的股票总手数，表征市场的活跃程度与流动性。
+  \item \textbf{成交额（Amount）}：交易日内成交的货币总金额。
+\end{itemize}
+收盘价与成交量（量价关系）是技术分析的基石，其变化模式蕴含着供需关系、投资者情绪与资金流向等信息。然而，原始数据维度有限且噪声较高，直接用于复杂模型预测效果有限，因此需要进行深入的特征工程。
 
-\subsubsection{国内研究综述}
-此处填写国内文献综述。可结合 \citeauthor{zhang2023example}（\citeyear{zhang2023example}）讨论本土数据特征、研究范式与常见局限。
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.8\textwidth]{price_trend.pdf}
+\caption{沪深300指数收盘价走势图}
+\label{fig:close_price}
+\end{figure}
 
-\subsubsection{研究评述}
-在文献评述中建议明确三点：已有研究解决了什么、尚未解决什么、本文将如何补足。
+\FloatBarrier
 
-\subsection{研究内容与方法}
+\subsection{衍生技术指标构造}
+为向模型提供更丰富、更具判别性的信息，本节系统化地构建了一个涵盖技术指标、外部动量和时间周期的多维特征库。
+\subsubsection{衍生技术指标特征}
+技术指标通过对历史价格和成交量进行数学变换，旨在识别趋势、动量和波动率等模式。本实验选取了以下几类经典指标：
 
-\subsubsection{研究内容}
-此处可按“研究目标、研究问题、预期贡献”描述研究内容，并在章节末给出对应关系。
+\textbf{1. 移动平均线（Moving Averages）} \\
+移动平均线通过平滑价格序列来识别趋势方向。实验计算了短期（5日）和中期（20日）简单移动平均线（SMA）。
+\begin{equation}
+  SMA_t(N) = \frac{1}{N} \sum_{i=0}^{N-1} Close_{t-i}
+\end{equation}
+其中，$SMA_t(5)$和$SMA_t(20)$分别反映了短期和中期市场平均成本，其相互位置与价格的关系可用于判断趋势强度与潜在反转。
 
-\subsubsection{技术路线（含图片示例）}
-图\ref{fig:tech_route_template} 演示了模板中的图片插入方式与交叉引用方式，实际使用时可直接替换图片文件。
+\textbf{2. 相对强弱指数（Relative Strength Index, RSI）} \\
+RSI通过比较特定周期内价格上涨与下跌的幅度来衡量资产的超买或超卖状态。计算公式为：
+\begin{equation}
+  RS = \frac{\text{AvgGain over N periods}}{\text{AvgLoss over N periods}}
+\end{equation}
+\begin{equation}
+  RSI = 100 - \frac{100}{1 + RS}
+\end{equation}
+本实验采用14日周期（$N=14$）。RSI值在0到100之间，通常认为高于70表明超买，低于30表明超卖，能够捕捉价格动量的衰竭点。
 
+\textbf{3. 平滑异同移动平均线（MACD）} \\
+MACD用于识别趋势的变化、方向、动量和持续时间。它由三部分组成：
+\begin{itemize}
+  \item \textbf{DIF（差离值）}：短期EMA与长期EMA之差。本实验采用标准参数（12， 26）。
+        \begin{equation}
+          DIF_t = EMA_t(12) - EMA_t(26)
+        \end{equation}
+  \item \textbf{DEA（信号线）}：DIF的9日EMA， $DEA_t = EMA(DIF, 9)$。
+  \item \textbf{MACD柱状图}：DIF与DEA之差， $MACD\_hist_t = DIF_t - DEA_t$。
+\end{itemize}
+MACD的交叉与柱状图缩放能有效揭示趋势的加速与减速。
 
-\section{研究设计与方法}
+\textbf{4. 布林带（Bollinger Bands, BB）} \\
+布林带由一条中轨（N日SMA）和两条上下轨（中轨加减N倍标准差）组成，用于衡量价格波动率和识别极端价格。
+\begin{equation}
+  BB\_middle_t = SMA_t(N)
+\end{equation}
+\begin{equation}
+  BB\_std_t = \sqrt{\frac{1}{N} \sum_{i=0}^{N-1} (Close_{t-i} - BB\_middle_t)^2}
+\end{equation}
+\begin{equation}
+  BB\_upper_t = BB\_middle_t + k \cdot BB\_std_t
+\end{equation}
+\begin{equation}
+  BB\_lower_t = BB\_middle_t - k \cdot BB\_std_t
+\end{equation}
+本实验采用$N=20, k=2$的标准参数。此外，还计算了带宽（$BB\_width$，反映波动率）和百分比（$BB\_\%B$，反映价格在通道内的相对位置）作为特征。
 
-\subsection{数据来源与描述（含表格示例）}
-表\ref{tab:data_summary} 为简单三线表示例，可用于展示样本规模、时间范围与字段数量。
+\subsubsection{宏观、资金与跨市场特征}
+为引入更广泛的市场驱动信息，本实验模拟引入了\textbf{北向资金动量}作为代表“聪明钱”动向的外部特征。在实际应用中，此类特征可扩展为国债收益率、汇率、大宗商品价格等宏观变量。
+对于这类外部时序特征，必须进行两项关键处理以符合建模要求：
+
+\subsubsection{时间周期编码}
+金融市场存在显著的日历效应，如“周内效应”（Weekend Effect）和“月份效应”（Month-of-the-Year Effect）。为让模型能够捕捉这种周期性规律，本实验对时间特征进行了连续性编码。
+传统的整数编码（如周一=0， 周日=6）会引入边界不连续性：周日（6）与周一（0）在时间上是连续的，但在数值空间上距离最大。为解决此问题，采用正弦（Sine）和余弦（Cosine）函数将一维离散时间点映射到二维单位圆上，公式如下：
+设原始时间特征为 $t$（星期几 $d \in [0,6]$，月份 $m \in [1,12]$），其周期长度为 $T$（$T_{week}=7$, $T_{month}=12$），则编码为：
+\begin{equation}
+  \text{enc\_sin} = \sin\left(\frac{2\pi \cdot t}{T}\right)
+\end{equation}
+\begin{equation}
+  \text{enc\_cos} = \cos\left(\frac{2\pi \cdot t}{T}\right)
+\end{equation}
+此方法确保了周期性：周日与周一的编码在二维空间中位置接近。同时，必须同时使用正弦和余弦分量以保证每个时间点在二维平面上的唯一性。最终，生成了 \texttt{sin\_dow}, \texttt{cos\_dow}, \texttt{sin\_month}, \texttt{cos\_month} 四个特征。
+
+\subsection{数据预处理}
+在完成特征构建后，必须经过严格的预处理流程才能将数据转化为适用于深度学习模型训练的样本。
+\subsubsection{归一化处理}
+深度学习模型对输入特征的尺度敏感。本实验采用 \textbf{最小-最大归一化（Min-Max Scaling）} 将特征映射到[0, 1]区间，公式如下：
+\begin{equation}
+  X' = \frac{X - X_{min}}{X_{max} - X_{min}}
+\end{equation}
+为防止前视偏差，归一化参数的拟合必须严格遵守时间顺序。本实验按时间顺序将数据划分为训练集（72\%）、验证集（10\%）和测试集（18\%）。\textbf{归一化操作所需的最小值（$X_{min}$）和最大值（$X_{max}$）仅从训练集数据中计算得到}。然后，使用训练集上拟合好的缩放器（Scaler）分别对验证集和测试集进行变换。这意味着模型在训练和评估的任一阶段，都未曾接触到未来数据的全局分布信息。
+目标变量（收盘价\texttt{close}）同样进行独立的归一化，并保存其缩放器参数，以便在模型预测完成后，将预测值逆变换回原始价格尺度，用于计算最终的评估指标（如RMSE, MAPE）。
+
+\subsubsection{时序滑动窗口切分}
+LSTM与Transformer等模型要求输入为固定长度的序列。本实验采用滑动窗口（Sliding Window）机制将一维时间序列转化为此实验所需的样本对。
+给定总特征序列，设定历史窗口长度（Look-back window）$L_{seq}=60$，预测窗口长度 $L_{pred}=1$。对于时间点 $t$，构建一个输入-输出对 $(X_t, y_t)$：
+\begin{itemize}
+  \item \textbf{输入 $X_t$}：一个形状为 $(L_{seq}, num\_features)$ 的矩阵，包含从 $t-L_{seq}+1$ 到 $t$ 时刻的所有特征。
+  \item \textbf{输出 $y_t$}：一个标量，即 $t+1$ 时刻的目标值（归一化后的收盘价）。
+\end{itemize}
+随后，窗口以步长 $step=1$ 向后滑动，生成下一个样本对 $(X_{t+1}, y_{t+1})$。此过程遍历整个数据集（需跳过起始和结尾的边界）。最终，所有样本被堆叠成两个三维张量：
+\begin{itemize}
+  \item \textbf{输入张量 $X$}: 形状为 $(N, L_{seq}, num\_features)$，其中 $N$ 为总样本数。
+  \item \textbf{输出张量 $y$}: 形状为 $(N, L_{pred})$。
+\end{itemize}
+此滑动窗口样本构建方法在训练集、验证集和测试集内部独立进行，并确保了时间顺序的严格性，为时序预测模型提供了结构化的输入。
+
+\section{LSTM-Transformer融合预测模型设计}
+\subsection{总体架构设计}
+本节详细阐述本课题提出的核心创新模型——串行LSTM-Transformer混合架构的设计细节。该架构的设计哲学在于，利用\textbf{长短期记忆网络}对时序依赖进行深度特征提取，并在此基础上引入轻量级\textbf{Transformer模块}进行全局特征的精炼与增强，以构建一个兼具局部时序建模能力与全局上下文感知能力的稳健预测模型。如图\ref{fig:model}所示，模型的总体架构由三大模块串联构成：LSTM骨干网络 (Backbone)、Transformer特征精炼模块以及最终的预测头。
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.8\textwidth]{arch.pdf}
+\caption{模型结构图}
+\label{fig:model}
+\end{figure}
+
+\FloatBarrier
+
+模型的输入数据为归一化后的三维张量 $\mathbf{X} \in \mathbb{R}^{B \times L \times D}$，其中 $B$ 为批次大小，$L=60$ 为序列长度，$D=22$ 为特征维度（包含量价特征与技术指标）。该张量依次流经以下模块：
+\begin{enumerate}
+  \item \textbf{Block 1: LSTM 骨干网络 (Backbone)} \\
+        输入数据首先进入一个单层LSTM模块。其作用是利用门控机制，对长度为60的时序窗口进行编码，捕获价格序列中的短期趋势、周期性与局部非线性模式。LSTM的隐藏层维度设置为128，其输出为编码后的特征序列 $\mathbf{H}_{\text{LSTM}} \in \mathbb{R}^{B \times L \times 128}$，该序列包含了每个时间步的上下文感知特征。
+  \item \textbf{Block 2: Transformer 特征精炼模块 (Pre-Norm \& ReZero Refinement)} \\
+        $\mathbf{H}_{\text{LSTM}}$ 随后进入轻量级Transformer精炼模块。本模型采用\textbf{Pre-Norm}残差结构，并在残差路径上引入\textbf{ReZero (Residual with Zero initialization)} 机制以优化训练稳定性。具体流程如下：
+        \begin{itemize}
+          \item 特征序列首先经过一个\textbf{LayerNorm}层进行归一化。
+          \item 随后进入一个\textbf{多头自注意力层}。该层设置4个头，每个头的维度为32，总维度保持128。多头机制允许模型从不同子空间并行关注序列中不同位置的依赖关系，从而对LSTM提取的特征进行全局层面的信息整合与重新加权。为防止过拟合，该层后应用了丢弃率为 $p=0.408$ 的Dropout。
+          \item 注意力层的输出经过一个\textbf{ReZero乘法器}。ReZero是一种简单的残差连接优化方法，它将残差路径的输出乘以一个可学习的标量参数 $\alpha$（初始值为0），其更新公式为：$x_{l+1} = x_l + \alpha_l \cdot F(x_l)$。在训练初期，$\alpha \approx 0$ 使得网络近似恒等映射，极大地稳定了深度网络的训练。
+          \item 最后，通过一个加法操作完成第一次残差连接，将ReZero处理后的特征与模块的原始输入 $\mathbf{H}_{\text{LSTM}}$ 相加。
+          \item 相加后的特征再依次通过第二个\textbf{LayerNorm层}、一个\textbf{前馈网络}以及第二个\textbf{ReZero乘法器}，并最终通过第二次残差连接完成模块的输出。前馈网络采用两层全连接结构（128 → 256 → 128），中间使用ReLU激活函数，同样应用了 $p=0.408$ 的Dropout。
+        \end{itemize}
+        该模块的输出 $\mathbf{H}_{\text{Refined}} \in \mathbb{R}^{B \times L \times 128}$ 是经过全局上下文信息增强的时序特征。
+  \item \textbf{Block 3: 预测头 (Prediction Head)} \\
+        为进行单步预测，我们提取精炼后特征序列 $\mathbf{H}_{\text{Refined}}$ 的最后一个时间步特征 $\mathbf{H}_{\text{Refined}}[:, -1, :] \in \mathbb{R}^{B \times 128}$，这代表了编码了全部历史信息的最新状态。该特征向量最后通过一个线性层（全连接层）映射为一维标量，即最终的预测值 $\hat{y} \in \mathbb{R}^{B \times 1}$。
+\end{enumerate}
+综上所述，本模型的数据流向遵循清晰的串行路径：原始输入 → LSTM特征提取 → Transformer全局精炼 → 提取最终状态 → 线性预测。该设计确保了LSTM和Transformer优势的互补，并通过Pre-Norm与ReZero机制保障了深层混合网络训练的可行性与效率。
+
+\subsection{局部序列特征提取（LSTM模块）}
+\begin{itemize}
+  \item 解释为什么用LSTM作为前置特征提取器。
+\end{itemize}
+\subsection{全局时序依赖捕捉（Transformer模块）}
+\begin{itemize}
+  \item 解释怎么把LSTM的输出喂给Transformer的Encoder。
+\end{itemize}
+\subsection{模型训练策略}
+为了在 LSTM、Transformer 以及 LSTM-Transformer 混合架构之间进行严谨且公平的性能评估，本研究设计了一套基于贝叶斯优化的自动化超参数搜索（Hyperparameter Optimization, HPO）机制。不同神经网络架构对超参数的敏感度差异显著（例如，Transformer 极易受学习率和批次大小影响），若采用统一的固定超参数，将引入严重的评估偏见。因此，本研究采用 Optuna 框架对各模型进行彻底的超参数解耦与独立寻优，确保最终性能对比建立在各架构的最佳状态之上。
+
+\textbf{1. 公平性约束与搜索策略} \\
+为保证对比实验的公平性，本研究确立了以下搜索约束原则：
+\begin{itemize}
+  \item \textbf{同等搜索深度}：为三种模型分别配置了相互独立的搜索进程，每个模型均进行 150 次试验（Trials），确保搜索空间的探索程度一致。
+  \item \textbf{目标函数统一}：所有试验均以验证集上的均方误差（Validation MSE）作为最小化目标，以此来指导贝叶斯优化器更新采样概率。
+\end{itemize}
+
+\textbf{2. 架构对等的超参数搜索空间} \\
+本研究构建了一个兼顾全局共享与架构特异性的超参数搜索空间。
+\begin{itemize}
+  \item \textbf{全局共享参数}：包括学习率（$10^{-5}$ 至 $5 \times 10^{-3}$，对数采样）、权重衰减率（$10^{-5}$ 至 $10^{-1}$，对数采样）、Dropout 比例（0.2至0.6），以及批次大小（Batch Size $\in \{32, 64, 128, 256\}$）。此外，为保证多头注意力机制（Multi-Head Attention）的维度整除合理性，隐藏层维度（Hidden Dimension）被严格限制在 $\{32, 64, 128\}$ 离散集合中。
+  \item \textbf{架构特异性参数}：针对序列模型与注意力模型，动态调整网络深度与宽度。LSTM 与 Transformer 的层数搜索范围均为 1至2层；注意力头数限制在 $\{2, 4, 8\}$；前馈神经网络（FFN）的扩展倍数在 2至4 之间动态采样。
+\end{itemize}
+
+\textbf{3. 稳定训练与自适应调度机制} \\
+考虑到 Transformer 架构在时间序列预测任务中容易出现梯度爆炸或对固定学习率不收敛的问题，本实验设计了稳健的训练协议：
+\begin{itemize}
+  \item \textbf{自适应学习率衰减}：引入 ReduceLROnPlateau 调度器。当验证集损失在连续 5 个 Epoch 内未改善时，学习率将自动衰减至当前的一半（Factor=0.5），最低衰减至 $10^{-6}$。
+  \item \textbf{梯度裁剪与早停}：所有模型均设定最大训练轮数为 100 Epochs，并设置全局梯度裁剪阈值为 1.0 以抑制异常梯度。配合 Patience 为 15 的早停（Early Stopping）机制，有效防止模型在搜索后期过拟合。
+\end{itemize}
+
+\textbf{4. 计算资源优化与早退剪枝} \\
+为提升 HPO 的搜索效率，本研究引入了中位值剪枝算法（Median Pruner）。该算法在初始的 5 次预热试验和每个试验的前 10 步评估后激活，自动中止那些表现处于历史下半区的劣质试验，大幅节约了计算算力。此外，针对大模型（如高维度多层的并行混合架构）在极端超参数组合下可能引发的显存溢出（Out-Of-Memory, OOM）问题，系统设计了异常捕获机制，自动舍弃导致 OOM 的超参数组合并执行显存回收（Garbage Collection），保障了多模型并发搜索的稳定性。
+
+各模型超参数搜索空间与范围如下表\ref{tab:hp_search}所示。
 
 \begin{table}[htbp]
   \centering
-  \caption{数据来源与样本描述（示例）}
-  \label{tab:data_summary}
-  \begin{tabular}{lccc}
+  \caption{各模型超参数搜索空间与范围}
+  \label{tab:hp_search}
+  \begin{tabularx}{\textwidth}{@{}lllX@{}}
     \toprule
-    数据集 & 样本量 & 时间范围 & 字段数 \\
+    \textbf{模型类别}                    & \textbf{超参数}            & \textbf{搜索范围/候选值}        & \textbf{说明}                                           \\
     \midrule
-    数据集A（训练） & XX,XXX & 20XX--20XX & XX \\
-    数据集B（验证） & X,XXX  & 20XX--20XX & XX \\
-    数据集C（对照） & X,XXX  & 20XX--20XX & XX \\
+    \multirow{5}{*}{\textbf{所有DL模型}} & \texttt{lr}                & [1e-5, 5e-3]，对数尺度 & 优化器学习率                                           \\
+                                         & \texttt{batch\_size}      & \{32, 64, 128, 256\}   & 训练批大小                                             \\
+                                         & \texttt{weight\_decay}    & [1e-5, 1e-1]，对数尺度 & L2 正则化系数                                          \\
+                                         & \texttt{dropout}          & [0.2, 0.6]             & Dropout 比例                                           \\
+                                         & \texttt{hidden\_dim}      & \{32, 64, 128\}        & 模型隐藏层维度                                         \\
+    \midrule
+    \textbf{LSTM}                        & \texttt{num\_layers}      & [1, 2]                 & LSTM堆叠层数                                           \\
+    \midrule
+    \multirow{3}{*}{\textbf{Transformer}} & \texttt{num\_heads}       & \{2, 4, 8\}            & 注意力头数                                             \\
+                                         & \texttt{num\_layers}      & [1, 2]                 & Transformer编码器层数                                  \\
+                                         & \texttt{ffn\_multiplier}  & [2, 4]                 & FFN隐藏层倍数 ($ffn\_dim = hidden\_dim \times multiplier$) \\
+    \midrule
+    \multirow{4}{*}{\textbf{LSTM-Transformer (串行)}} & \texttt{num\_lstm\_layers} & [1, 2]                 & 混合架构中LSTM的层数                                  \\
+                                         & \texttt{num\_trans\_layers} & [1, 2]               & 混合架构中Transformer的层数                           \\
+                                         & \texttt{num\_heads}       & \{2, 4, 8\}            & 注意力头数                                             \\
+                                         & \texttt{ffn\_multiplier}  & [2, 4]                 & FFN隐藏层倍数                                         \\
+    \midrule
+    \multirow{5}{*}{\textbf{XGBoost}}    & \texttt{n\_estimators}    & [50, 500]              & 弱学习器数量                                           \\
+                                         & \texttt{max\_depth}       & [3, 10]                & 树的最大深度                                           \\
+                                         & \texttt{learning\_rate}   & [1e-3, 0.3]，对数尺度  & 学习率                                                 \\
+                                         & \texttt{subsample}        & [0.5, 1.0]             & 样本采样比例                                           \\
+                                         & \texttt{colsample\_bytree} & [0.5, 1.0]           & 特征采样比例                                           \\
+    \midrule
+    \multirow{3}{*}{\textbf{ARIMA}}      & \texttt{p}                & [0, 5]                 & 自回归项数                                             \\
+                                         & \texttt{d}                & [0, 1]                 & 使序列平稳的最小差分次数                               \\
+                                         & \texttt{q}                & [0, 5]                 & 移动平均项数                                           \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{实验结果与性能分析}
+\subsection{实验环境与参数设置}
+通过4.4的超参数搜索，最终各个模型的超参数如下表\ref{tab:best_hp}所示。
+
+\begin{table}[htbp]
+  \centering
+  \caption{各模型最优超参数配置}
+  \label{tab:best_hp}
+  \begin{tabular}{@{}lll@{}}
+    \toprule
+    \textbf{模型}                        & \multicolumn{1}{c}{\textbf{最优训练参数 (\texttt{train\_args})}} & \multicolumn{1}{c}{\textbf{最优模型参数 (\texttt{model\_args})}} \\
+    \midrule
+    \textbf{LSTM}                        & \begin{tabular}[c]{@{}l@{}}\texttt{batch\_size}: 128\\ \texttt{lr}: 2.068e-3\\ \texttt{weight\_decay}: 1.556e-05\end{tabular} & \begin{tabular}[c]{@{}l@{}}\texttt{hidden\_dim}: 128\\ \texttt{num\_layers}: 1\\ \texttt{dropout}: 0.216\end{tabular} \\
+    \midrule
+    \textbf{Transformer}                 & \begin{tabular}[c]{@{}l@{}}\texttt{batch\_size}: 32\\ \texttt{lr}: 1.054e-3\\ \texttt{weight\_decay}: 9.590e-04\end{tabular} & \begin{tabular}[c]{@{}l@{}}\texttt{d\_model}: 128\\ \texttt{num\_heads}: 2\\ \texttt{num\_layers}: 2\\ \texttt{ffn\_dim}: 512 (4*128)\\ \texttt{dropout}: 0.265\end{tabular} \\
+    \midrule
+    \textbf{LSTM-Transformer}     & \begin{tabular}[c]{@{}l@{}}\texttt{batch\_size}: 128\\ \texttt{lr}: 3.476e-3\\ \texttt{weight\_decay}: 2.416e-05\end{tabular} & \begin{tabular}[c]{@{}l@{}}\texttt{hidden\_dim}: 128\\ \texttt{num\_lstm\_layers}: 1\\ \texttt{num\_trans\_layers}: 1\\ \texttt{num\_heads}: 4\\ \texttt{ffn\_dim}: 256 (2*128)\\ \texttt{dropout}: 0.408\end{tabular} \\
+    \midrule
+    \textbf{XGBoost} &  & \begin{tabular}[c]{@{}l@{}}\texttt{n\_estimators}: 288\\ \texttt{max\_depth}: 3\\ \texttt{learning\_rate}: 0.03295\\ \texttt{subsample}: 0.7325\\ \texttt{colsample\_bytree}: 0.9088\end{tabular} \\
+    \midrule
+    \textbf{ARIMA}   &  & \texttt{order}: (0, 1, 0) \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-\subsection{变量定义（含多行表格）}
-表\ref{tab:variable_definition} 演示了 \texttt{multirow} 的用法。
+\subsection{结果分析}
+各模型在测试集上的预测性能评估结果如表\ref{tab:results}所示。
 
 \begin{table}[htbp]
   \centering
-  \caption{变量定义与说明（示例）}
-  \label{tab:variable_definition}
-  \begin{tabular}{llll}
+  \caption{各模型预测性能对比（均值±标准差）}
+  \label{tab:results}
+  \begin{tabular}{@{}lcccccc@{}}
     \toprule
-    \multirow{2}{*}{变量类型} & \multirow{2}{*}{变量名} & \multicolumn{2}{c}{说明} \\
-    \cmidrule(lr){3-4}
-     &  & 含义 & 取值示例 \\
+    \textbf{Model}             & \textbf{MSE}               & \textbf{RMSE}          & \textbf{MAE}           & \textbf{R²}              & \textbf{MAPE\%}       \\
     \midrule
-    \multirow{2}{*}{被解释变量} & $Y$ & 目标变量 & XX.XX \\
-     & $Y^{*}$ & 标准化目标变量 & 0--1 \\
-    \multirow{3}{*}{解释变量} & $X_1$ & 连续型特征 & XX.XX \\
-     & $X_2$ & 分类型特征 & A/B/C \\
-     & $X_3$ & 交互项特征 & $X_1 \times X_2$ \\
+    ARIMA                      & 1765.83 $\pm$ 0.00        & 42.02 $\pm$ 0.00      & 28.74 $\pm$ 0.00      & 0.9853 $\pm$ 0.0000     & 0.74 $\pm$ 0.00      \\
+    XGBoost                    & 1972.16 $\pm$ 43.34       & 44.41 $\pm$ 0.49      & 30.91 $\pm$ 0.37      & 0.9836 $\pm$ 0.0004     & 0.80 $\pm$ 0.01      \\
+    LSTM                       & 3081.77 $\pm$ 294.51      & 55.45 $\pm$ 2.59      & 40.30 $\pm$ 2.53      & 0.9744 $\pm$ 0.0024     & 1.04 $\pm$ 0.07      \\
+    Transformer                & 7402.78 $\pm$ 2428.89     & 84.91 $\pm$ 13.89     & 67.77 $\pm$ 13.83     & 0.9385 $\pm$ 0.0202     & 1.73 $\pm$ 0.35      \\
+    Serial LSTM-Trans          & 2759.93 $\pm$ 150.43      & 52.52 $\pm$ 1.43      & 37.28 $\pm$ 1.71      & 0.9771 $\pm$ 0.0012     & 0.97 $\pm$ 0.04      \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-\subsection{方法说明（含公式示例）}
-本节示例包括行内公式与独立公式。行内公式示例：$y=\beta_0+\beta_1 x+\epsilon$。
 
-\begin{equation}
-  \hat{y}_i = \beta_0 + \sum_{j=1}^{p}\beta_j x_{ij}
-  \label{eq:linear_model}
-\end{equation}
-
-\begin{equation}
-  \mathrm{MSE} = \frac{1}{n}\sum_{i=1}^{n}(y_i-\hat{y}_i)^2
-  \label{eq:mse}
-\end{equation}
-
-\begin{equation}
-  \mathrm{MAPE} = \frac{100\%}{n}\sum_{i=1}^{n}\left|\frac{y_i-\hat{y}_i}{y_i}\right|
-  \label{eq:mape}
-\end{equation}
-
-由式\ref{eq:linear_model}--式\ref{eq:mape}可见，方法设定、误差度量与评价指标三者构成完整的方法链条。
-
-\section{模板展示与写作指引}
-
-\subsection{内容展示示例（含图片引用）}
-本节用于演示正文如何引用图片与表格。可结合图\ref{fig:tech_route_template} 和表\ref{tab:data_summary} 说明你的材料来源与组织方式。
-
-\subsection{结果呈现示例（含表格、交叉引用）}
-表\ref{tab:scheme_metrics} 用于演示对比型结果表的写法，包含“表格单元格内引用文献”的示例，正文可说明不同方案之间的差异与适用条件。
-
-\begin{table}[htbp]
+\begin{figure}[htbp]
   \centering
-  \caption{方案对比结果与文献依据（示例）}
-  \label{tab:scheme_metrics}
-  \begin{tabular}{p{2.2cm}ccc p{4.2cm}}
-    \toprule
-    方案 & 指标A & 指标B & 指标C & 文献依据 \\
-    \midrule
-    方案A（基线） & XX.XX & XX.XX & XX.XX & 深度学习任务的基线设定可参考 \cite{smith2022deep}。 \\
-    方案B（增强） & XX.XX & XX.XX & XX.XX & 机器学习流程与评估框架可参考 \cite{wilson2021machine}。 \\
-    方案C（优化） & XX.XX & XX.XX & XX.XX & 参数优化与大规模训练策略可参考 \cite{chen2023neural}。 \\
-    \bottomrule
-  \end{tabular}
-\end{table}
+  \begin{minipage}{0.8\textwidth}
+    
+    \includegraphics[width=\linewidth]{assets/consics_version/image.png}
+    \caption{训练与验证损失曲线}
+    \label{fig:loss}
+  \end{minipage}
+\end{figure}
 
-\subsection{写作说明与边界}
-本节可写三类内容：第一，关键发现对应了哪些研究问题；第二，现有证据支持到什么程度；第三，结论适用范围与后续可补充的数据或方法。
+\begin{figure}[htbp]
+  \centering
+  \begin{minipage}{0.8\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{assets/consics_version/image1.png}
+    \caption{预测值与真实值对比}
+    \label{fig:prediction}
+  \end{minipage}
+\end{figure} 
+
+\begin{figure}[htbp]
+  \centering
+  \begin{minipage}{0.8\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{assets/consics_version/image2.png}
+    \caption{预测误差分布}
+    \label{fig:error_dist}
+  \end{minipage}
+\end{figure} 
+
+\begin{figure}[htbp]
+  \centering
+  \begin{minipage}{0.8\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{assets/consics_version/image3.png}
+    \caption{预测值与真实值散点拟合网格}
+    \label{fig:scatter_grid}
+  \end{minipage}
+\end{figure}
+
+\subsection{参数敏感性分析（maybe，未完成）}
+\begin{itemize}
+  \item 滑动窗口长度（如分别取10天、20天、30天、60天）对RMSE的影响 and so on
+\end{itemize}
+
+\section{总结与展望}
+\subsection{总结}
+\subsection{展望}
+模型没有引入新闻情绪文本分析（NLP），没有进行深入的特征工程分析，作为未来改进方向。
 
 % ==================== 参考文献 ====================
 \begin{references}
-  \bibliography{references}
+
 \end{references}
-
-% ==================== 附录 ====================
-\appendix
-\setcounter{tocdepth}{1}
-\hypersetup{bookmarksdepth=1}
-
-% 目录与PDF导航仅显示“附录 A”一级
-\refstepcounter{section}
-\phantomsection
-\addcontentsline{toc}{section}{\numberline{\thesection}}
-\pdfbookmark[1]{\thesection}{appendixA}
-\section*{\thesection}
-
-\subsection*{代码清单示例}
-\begin{lstlisting}[language=Python,caption={Python代码清单示例},label={lst:appendix_code}]
-def train_model(data):
-    """此处填写训练逻辑。"""
-    model = {"name": "demo_model", "score": 0.0}
-    return model
-
-if __name__ == "__main__":
-    sample_data = [1, 2, 3]
-    result = train_model(sample_data)
-    print(result)
-\end{lstlisting}
-
-\subsection*{附录表格示例}
-\begin{table}[htbp]
-  \centering
-  \caption{附录参数设置示例}
-  \label{tab:appendix_params}
-  \begin{tabular}{lll}
-    \toprule
-    参数名 & 取值 & 说明 \\
-    \midrule
-    参数A & XX & 此处填写参数含义 \\
-    参数B & XX & 此处填写参数含义 \\
-    参数C & XX & 此处填写参数含义 \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-附录中的代码见清单\ref{lst:appendix_code}，附录中的参数说明见表\ref{tab:appendix_params}。
 
 % ==================== 致谢 ====================
 \begin{acknowledgement}
-  首先感谢我自己，其次是overleaf上开源之前版本的残橘子学长，感谢claude code、codex、antigravity，这些coding-agent真的帮我解决了很多板式调优的问题（不然我可能还在调板式。。。）\\
-  有任何问题和建议可以直接私信我：\textit{JohntanX}、发邮件到\textit{1391861399@qq.com}、直接issue或者pull request。\\
-  希望能够帮助到更多深受论文折磨的同学。
+
 \end{acknowledgement}
 
 \end{document}
