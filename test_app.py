@@ -258,14 +258,19 @@ class TestFinancialPredictionSystem(unittest.TestCase):
         expected_models = ['LSTM', 'Transformer', 'LSTM_Transformer']
         for model in expected_models:
             self.assertIn(model, best_configs)
-            
-            # 检查必要的配置参数
             config = best_configs[model]
-            required_params = ['hidden_dim', 'num_lstm_layers', 'num_heads', 
-                             'num_transformer_layers', 'ffn_dim', 'dropout']
-            
+            self.assertIn('model_args', config)
+            model_args = config['model_args']
+
+            if model == 'LSTM':
+                required_params = ['hidden_dim', 'num_layers', 'dropout']
+            elif model == 'Transformer':
+                required_params = ['d_model', 'num_heads', 'num_layers', 'ffn_dim', 'dropout']
+            else:
+                required_params = ['hidden_dim', 'num_lstm_layers', 'num_heads', 'num_transformer_layers', 'ffn_dim', 'dropout']
+
             for param in required_params:
-                self.assertIn(param, config)
+                self.assertIn(param, model_args)
     
     def test_plot_functions_exist(self):
         """测试绘图函数存在性"""
