@@ -10,3 +10,6 @@ results/
 *.toc
 *.out
 *.pdf
+*.bbl
+*.blg
+*.xdv
