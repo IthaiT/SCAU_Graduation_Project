@@ -298,25 +298,22 @@ R^2 = 1 - \frac{\sum_{i=1}^{n} (y_i - \hat{y}_i)^2}{\sum_{i=1}^{n} (y_i - \bar{y
 
 
 \section{多维量价特征工程与数据处理}
+
 \subsection{实验数据来源与说明}
-本文选取沪深300指数（CSI 300）作为主要研究标的。沪深300指数由上海和深圳证券交易所中市值大、流动性好的300只股票组成，综合反映了中国A股市场的整体表现，具有代表性强、数据连续性好的特点，是检验量价预测模型的理想对象。
-实验使用的日频行情数据时间跨度为2006年3月1日至2025年12月31日。原始数据字段包括：日期（\texttt{date}）、开盘价（\texttt{open}）、最高价（\texttt{high}）、最低价（\texttt{low}）、收盘价（\texttt{close}）、成交量（\texttt{volume}）、成交额（\texttt{amount}）。金融时间序列常因市场节假日、休市等原因产生缺失值。为维持时间序列的连续性，本实验采用金融数据分析中广泛使用的前向填充（Forward Fill, ffill）方法进行处理。即，若某交易日数据缺失，则使用前一个有效交易日的数值进行填充。此方法假设市场在非交易期间状态未发生突变，是处理金融日历数据缺失的合理惯例。
+沪深300指数（CSI 300）由上海和深圳证券交易所中市值大、流动性好的300只股票组成，综合反映了中国A股市场的整体表现，具有较好的代表性与数据连续性。实验选取该指数作为研究对象，日频行情数据的时间跨度为2006年3月1日至2025年12月31日。
+
+原始行情数据通过 \texttt{akshare} 接口从新浪源获取，包含日期（\texttt{date}）、开盘价（\texttt{open}）、最高价（\texttt{high}）、最低价（\texttt{low}）、收盘价（\texttt{close}）、成交量（\texttt{volume}）等字段。由于新浪源未提供成交额（\texttt{amount}）字段，实验中采用“收盘价 $\times$ 成交量”进行合理近似计算。
+
+金融时间序列常因市场节假日、休市等原因产生缺失值。为维持时间序列的连续性，实验采用金融数据分析中广泛使用的前向填充（Forward Fill, ffill）方法进行处理：若某交易日数据缺失，则使用前一个有效交易日的数值进行填充。此方法假设市场在非交易期间状态未发生突变，是处理金融日历数据缺失的常规做法。
 
 \subsection{基础量价数据分析}
-原始行情数据是市场行为最直接的记录，构成了特征工程的基础层。每个交易日的数据包含以下核心字段：
-\begin{itemize}
-  \item \textbf{开盘价（Open）}：交易日开始时的第一笔成交价格。
-  \item \textbf{最高价（High）}：交易日内达到的最高成交价格。
-  \item \textbf{最低价（Low）}：交易日内达到的最低成交价格。
-  \item \textbf{收盘价（Close）}：交易日结束前的最后一笔成交价格，是金融分析中最常使用的基准价格。
-  \item \textbf{成交量（Volume）}：交易日内成交的股票总手数，表征市场的活跃程度与流动性。
-  \item \textbf{成交额（Amount）}：交易日内成交的货币总金额。
-\end{itemize}
-收盘价与成交量（量价关系）是技术分析的基石，其变化模式蕴含着供需关系、投资者情绪与资金流向等信息。然而，原始数据维度有限且噪声较高，直接用于复杂模型预测效果有限，因此需要进行深入的特征工程。
+原始行情数据记录了每个交易日的开盘价、最高价、最低价、收盘价、成交量与成交额，这些基础量价变量构成特征工程的第一层。其中，收盘价是金融分析中最常使用的基准价格，成交量表征市场的活跃程度与流动性。量价关系的变化模式蕴含着供需关系、投资者情绪与资金流向等信息。
+
+如图 \ref{fig:close_price} 所示，沪深300指数在考察期内呈现出典型的牛熊周期交替特征。然而，原始数据维度有限且噪声较高，直接用于复杂模型预测效果有限，因此需要构建更具判别性的衍生特征。
 
 \begin{figure}[htbp]
 \centering
-\includegraphics[width=0.8\textwidth]{price_trend.pdf}
+\includegraphics[width=1.0\textwidth]{price_trend.pdf}
 \caption{沪深300指数收盘价走势图}
 \label{fig:close_price}
 \end{figure}
@@ -324,41 +321,42 @@ R^2 = 1 - \frac{\sum_{i=1}^{n} (y_i - \hat{y}_i)^2}{\sum_{i=1}^{n} (y_i - \bar{y
 \FloatBarrier
 
 \subsection{衍生技术指标构造}
-为向模型提供更丰富、更具判别性的信息，本节系统化地构建了一个涵盖技术指标、外部动量和时间周期的多维特征库。
-\subsubsection{衍生技术指标特征}
-技术指标通过对历史价格和成交量进行数学变换，旨在识别趋势、动量和波动率等模式。本实验选取了以下几类经典指标：
 
-\textbf{1. 移动平均线（Moving Averages）} \\
-移动平均线通过平滑价格序列来识别趋势方向。实验计算了短期（5日）和中期（20日）简单移动平均线（SMA）。
+\subsubsection{技术指标特征}
+技术指标通过对历史价格和成交量进行数学变换，用于识别趋势、动量和波动率等模式。实验选取了移动平均线、相对强弱指数、平滑异同移动平均线以及布林带四类经典指标，使用 \texttt{pandas\_ta} 库进行批量计算，并在计算后移除了产生的NaN值。
+
+\paragraph{移动平均线}
+移动平均线通过平滑价格序列来识别趋势方向。本实验计算了短期（5日）和中期（20日）简单移动平均线（SMA），其计算公式为
 \begin{equation}
-  SMA_t(N) = \frac{1}{N} \sum_{i=0}^{N-1} Close_{t-i}
+  \text{SMA}_t(N) = \frac{1}{N} \sum_{i=0}^{N-1} \text{Close}_{t-i},
 \end{equation}
-其中，$SMA_t(5)$和$SMA_t(20)$分别反映了短期和中期市场平均成本，其相互位置与价格的关系可用于判断趋势强度与潜在反转。
+其中 $\text{SMA}_t(5)$ 和 $\text{SMA}_t(20)$ 分别反映了短期和中期市场平均成本，两者的相互位置与价格的关系可用于判断趋势强度与潜在反转。
 
-\textbf{2. 相对强弱指数（Relative Strength Index, RSI）} \\
-RSI通过比较特定周期内价格上涨与下跌的幅度来衡量资产的超买或超卖状态。计算公式为：
+\paragraph{相对强弱指数}
+相对强弱指数（RSI）通过比较特定周期内价格上涨与下跌的幅度来衡量资产的超买或超卖状态。计算公式为
 \begin{equation}
   RS = \frac{\text{AvgGain over N periods}}{\text{AvgLoss over N periods}}
 \end{equation}
 \begin{equation}
   RSI = 100 - \frac{100}{1 + RS}
 \end{equation}
-本实验采用14日周期（$N=14$）。RSI值在0到100之间，通常认为高于70表明超买，低于30表明超卖，能够捕捉价格动量的衰竭点。
+实验采用14日周期（$N=14$）。RSI值在0到100之间，通常认为高于70表明超买，低于30表明超卖，能够捕捉价格动量的衰竭点。
 
-\textbf{3. 平滑异同移动平均线（MACD）} \\
-MACD用于识别趋势的变化、方向、动量和持续时间。它由三部分组成：
-\begin{itemize}
-  \item \textbf{DIF（差离值）}：短期EMA与长期EMA之差。本实验采用标准参数（12， 26）。
-        \begin{equation}
-          DIF_t = EMA_t(12) - EMA_t(26)
-        \end{equation}
-  \item \textbf{DEA（信号线）}：DIF的9日EMA， $DEA_t = EMA(DIF, 9)$。
-  \item \textbf{MACD柱状图}：DIF与DEA之差， $MACD\_hist_t = DIF_t - DEA_t$。
-\end{itemize}
-MACD的交叉与柱状图缩放能有效揭示趋势的加速与减速。
+\paragraph{平滑异同移动平均线}
+平滑异同移动平均线（MACD）用于识别趋势的变化、方向、动量和持续时间。它由差离值（DIF）、信号线（DEA）以及MACD柱状图三部分组成：
+\begin{equation}
+  DIF_t = EMA_t(12) - EMA_t(26)
+\end{equation}
+\begin{equation}
+  DEA_t = EMA(DIF, 9)
+\end{equation}
+\begin{equation}
+  MACD\_hist_t = DIF_t - DEA_t
+\end{equation}
+实验采用标准参数（12, 26, 9），其中DIF为短期EMA与长期EMA之差，DEA为DIF的9日指数移动平均，MACD柱状图则为DIF与DEA之差。MACD的交叉与柱状图缩放能有效揭示趋势的加速与减速。
 
-\textbf{4. 布林带（Bollinger Bands, BB）} \\
-布林带由一条中轨（N日SMA）和两条上下轨（中轨加减N倍标准差）组成，用于衡量价格波动率和识别极端价格。
+\paragraph{布林带}
+布林带由一条中轨（$N$日SMA）和两条上下轨（中轨加减$N$倍标准差）组成，用于衡量价格波动率和识别极端价格。计算公式为
 \begin{equation}
   BB\_middle_t = SMA_t(N)
 \end{equation}
@@ -371,47 +369,49 @@ MACD的交叉与柱状图缩放能有效揭示趋势的加速与减速。
 \begin{equation}
   BB\_lower_t = BB\_middle_t - k \cdot BB\_std_t
 \end{equation}
-本实验采用$N=20, k=2$的标准参数。此外，还计算了带宽（$BB\_width$，反映波动率）和百分比（$BB\_\%B$，反映价格在通道内的相对位置）作为特征。
 
-\subsubsection{宏观、资金与跨市场特征}
-为引入更广泛的市场驱动信息，本实验模拟引入了\textbf{北向资金动量}作为代表“聪明钱”动向的外部特征。在实际应用中，此类特征可扩展为国债收益率、汇率、大宗商品价格等宏观变量。
-对于这类外部时序特征，必须进行两项关键处理以符合建模要求：
+其中实验采用 $N=20$, $k=2$ 的标准参数。此外，还计算了带宽（$\text{BB\_width}$，反映波动率）和百分比（$\text{BB\_\%B}$，反映价格在通道内的相对位置）作为特征。
+
+\subsubsection{宏观资金与跨市场特征}
+为引入更广泛的市场驱动信息，实验模拟引入了北向资金动量作为代表外部资金动向的特征。北向资金数据基于东方财富接口获取，由于早期数据缺失，采用零填充处理。基于北向资金净流入计算其5日与20日移动平均，取二者差值作为北向资金动量特征。在实际应用中，此类特征可扩展为国债收益率、汇率、大宗商品价格等宏观变量。
 
 \subsubsection{时间周期编码}
-金融市场存在显著的日历效应，如“周内效应”（Weekend Effect）和“月份效应”（Month-of-the-Year Effect）。为让模型能够捕捉这种周期性规律，本实验对时间特征进行了连续性编码。
-传统的整数编码（如周一=0， 周日=6）会引入边界不连续性：周日（6）与周一（0）在时间上是连续的，但在数值空间上距离最大。为解决此问题，采用正弦（Sine）和余弦（Cosine）函数将一维离散时间点映射到二维单位圆上，公式如下：
-设原始时间特征为 $t$（星期几 $d \in [0,6]$，月份 $m \in [1,12]$），其周期长度为 $T$（$T_{week}=7$, $T_{month}=12$），则编码为：
+金融市场存在显著的日历效应，如“周内效应”和“月份效应”。为让模型能够捕捉这种周期性规律，实验对时间特征进行了连续性编码。
+
+传统的整数编码（如周一=0，周日=6）会引入边界不连续性：周日（6）与周一（0）在时间上是连续的，但在数值空间上距离最大。为解决此问题，采用正弦和余弦函数将一维离散时间点映射到二维单位圆上。设原始时间特征为 $t$（星期几 $d \in [0,6]$，月份 $m \in [1,12]$），其周期长度为 $T$（$T_{\text{week}}=7$, $T_{\text{month}}=12$），则编码为
 \begin{equation}
-  \text{enc\_sin} = \sin\left(\frac{2\pi \cdot t}{T}\right)
+  \text{enc\_sin} = \sin\left(\frac{2\pi \cdot t}{T}\right), \\
 \end{equation}
 \begin{equation}
-  \text{enc\_cos} = \cos\left(\frac{2\pi \cdot t}{T}\right)
+  \text{enc\_cos} = \cos\left(\frac{2\pi \cdot t}{T}\right).
 \end{equation}
 此方法确保了周期性：周日与周一的编码在二维空间中位置接近。同时，必须同时使用正弦和余弦分量以保证每个时间点在二维平面上的唯一性。最终，生成了 \texttt{sin\_dow}, \texttt{cos\_dow}, \texttt{sin\_month}, \texttt{cos\_month} 四个特征。
 
 \subsection{数据预处理}
-在完成特征构建后，必须经过严格的预处理流程才能将数据转化为适用于深度学习模型训练的样本。
+在完成特征构建后，需经过严格的预处理流程才能将数据转化为适用于深度学习模型训练的样本。
+
 \subsubsection{归一化处理}
-深度学习模型对输入特征的尺度敏感。本实验采用 \textbf{最小-最大归一化（Min-Max Scaling）} 将特征映射到[0, 1]区间，公式如下：
+深度学习模型对输入特征的尺度敏感。实验采用最小-最大归一化（Min-Max Scaling）将特征映射到[0, 1]区间，公式为
 \begin{equation}
-  X' = \frac{X - X_{min}}{X_{max} - X_{min}}
+  X' = \frac{X - X_{\min}}{X_{\max} - X_{\min}}.
 \end{equation}
-为防止前视偏差，归一化参数的拟合必须严格遵守时间顺序。本实验按时间顺序将数据划分为训练集（72\%）、验证集（10\%）和测试集（18\%）。\textbf{归一化操作所需的最小值（$X_{min}$）和最大值（$X_{max}$）仅从训练集数据中计算得到}。然后，使用训练集上拟合好的缩放器（Scaler）分别对验证集和测试集进行变换。这意味着模型在训练和评估的任一阶段，都未曾接触到未来数据的全局分布信息。
-目标变量（收盘价\texttt{close}）同样进行独立的归一化，并保存其缩放器参数，以便在模型预测完成后，将预测值逆变换回原始价格尺度，用于计算最终的评估指标（如RMSE, MAPE）。
+为防止前视偏差，归一化参数的拟合必须严格遵守时间顺序。实验按时间顺序将数据划分为训练集（72\%）、验证集（10\%）和测试集（18\%）。归一化操作所需的最小值（$X_{\min}$）和最大值（$X_{\max}$）仅从训练集数据中计算得到。然后，使用训练集上拟合好的缩放器分别对验证集和测试集进行变换。这意味着模型在训练和评估的任一阶段，都未曾接触到未来数据的全局分布信息。
+
+目标变量（收盘价 \texttt{close}）同样进行独立的归一化，并保存其缩放器参数，以便在模型预测完成后，将预测值逆变换回原始价格尺度，用于计算最终的评估指标（如RMSE, MAPE）。
 
 \subsubsection{时序滑动窗口切分}
-LSTM与Transformer等模型要求输入为固定长度的序列。本实验采用滑动窗口（Sliding Window）机制将一维时间序列转化为此实验所需的样本对。
-给定总特征序列，设定历史窗口长度（Look-back window）$L_{seq}=60$，预测窗口长度 $L_{pred}=1$。对于时间点 $t$，构建一个输入-输出对 $(X_t, y_t)$：
-\begin{itemize}
-  \item \textbf{输入 $X_t$}：一个形状为 $(L_{seq}, num\_features)$ 的矩阵，包含从 $t-L_{seq}+1$ 到 $t$ 时刻的所有特征。
-  \item \textbf{输出 $y_t$}：一个标量，即 $t+1$ 时刻的目标值（归一化后的收盘价）。
-\end{itemize}
-随后，窗口以步长 $step=1$ 向后滑动，生成下一个样本对 $(X_{t+1}, y_{t+1})$。此过程遍历整个数据集（需跳过起始和结尾的边界）。最终，所有样本被堆叠成两个三维张量：
-\begin{itemize}
-  \item \textbf{输入张量 $X$}: 形状为 $(N, L_{seq}, num\_features)$，其中 $N$ 为总样本数。
-  \item \textbf{输出张量 $y$}: 形状为 $(N, L_{pred})$。
-\end{itemize}
-此滑动窗口样本构建方法在训练集、验证集和测试集内部独立进行，并确保了时间顺序的严格性，为时序预测模型提供了结构化的输入。
+LSTM与Transformer等模型要求输入为固定长度的序列。实验采用滑动窗口（Sliding Window）机制将一维时间序列转化为模型所需的样本对。如图 \ref{fig:sliding_window} 所示，给定总特征序列，设定历史窗口长度（Look-back window）$L_{\text{seq}}=60$，预测窗口长度 $L_{\text{pred}}=1$。对于时间点 $t$，构建一个输入-输出对 $(X_t, y_t)$：输入 $X_t$ 为一个形状为 $(L_{\text{seq}}, \text{num\_features})$ 的矩阵，包含从 $t-L_{\text{seq}}+1$ 到 $t$ 时刻的所有特征；输出 $y_t$ 为一个标量，即 $t+1$ 时刻的目标值（归一化后的收盘价）。
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=1.0\textwidth]{sliding_window.pdf}
+\caption{时序滑动窗口切分机制示意图}
+\label{fig:sliding_window}
+\end{figure}
+
+\FloatBarrier
+
+随后，窗口以步长 $\text{step}=1$ 向后滑动，生成下一个样本对 $(X_{t+1}, y_{t+1})$。此过程遍历整个数据集（需跳过起始和结尾的边界）。最终，所有样本被堆叠成两个三维张量：输入张量 $X$ 形状为 $(N, L_{\text{seq}}, \text{num\_features})$，输出张量 $y$ 形状为 $(N, L_{\text{pred}})$，其中 $N$ 为总样本数。此滑动窗口样本构建方法在训练集、验证集和测试集内部独立进行，并确保了时间顺序的严格性，为时序预测模型提供了结构化的输入。
+
 
 \section{LSTM-Transformer融合预测模型设计}
 \subsection{总体架构设计}

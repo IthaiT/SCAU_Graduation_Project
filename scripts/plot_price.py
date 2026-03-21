@@ -25,7 +25,6 @@ def plot_price(csv_path, output_path, date_col="date", price_col="close"):
 
     plt.xlabel("date")
     plt.ylabel("close price")
-    plt.title(" CSI300 Close Price Trend")
 
     plt.tight_layout()
 
